@@ -44,7 +44,7 @@ browsing remain open. Normal Immich use must remain available during development
 
 ## Development
 
-Two executable development components are available:
+Three connected development components are available:
 
 1. [Private snapshots](docs/SNAPSHOT.md): a quiesced database/media copy is streamed into
    standard OpenPGP encryption. Real synthetic-data tests exercise two identical restores,
@@ -53,6 +53,10 @@ Two executable development components are available:
    snapshot to the existing core fragment-storage operations, retaining the same recovery
    journal across retries and verifying complete restored ciphertext. Its process/contract
    tests do **not** yet prove peer-backed Immich storage.
+3. [Snapshot storage CLI](docs/SNAPSHOT_STORAGE.md): explicit create, deposit, progress,
+   restore, renew and delete commands connect the snapshot receipt to that bridge. The
+   CLI uploads only hash-checked ciphertext and restores into a new private bundle;
+   supplying the owner's key and decrypting remain separate operations.
 
 Do not upload the entire snapshot bundle: only `snapshot.pgp` belongs on storage peers,
 never `recovery.key`. A real combined peer deposit/restore and a running restored Immich
