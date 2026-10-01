@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "project": "Immich",
+  "repository": "https://github.com/immich-app/immich.git",
+  "release": "v3.2.4",
+  "commit": "db355f79d910bbfc6378117ed10868493c97b922",
+  "release_url": "https://github.com/immich-app/immich/releases/tag/v3.2.4",
+  "release_published_at": "2026-09-28T16:52:50Z",
+  "verified_on": "2026-09-30",
+  "verification": {
+    "official_latest_release": true,
+    "draft": false,
+    "prerelease": false,
+    "tag_ref": "refs/tags/v3.2.4",
+    "remote_tag_commit_matches_checkout": true,
+    "method": "Official release API, git ls-remote, exact checkout and SHA-256 of committed blobs",
+    "claim": "Source inspection only; no dependency installation, build, server execution or mobile deployment"
+  },
+  "license": {
+    "declared": "GNU Affero General Public License version 3",
+    "source": "LICENSE",
+    "sha256": "a3bad629f67f442b23b5224419e49edafc32e6b9c876b89464f7aafe6091ccde",
+    "additional_license_files": [
+      "packages/cli/LICENSE"
+    ],
+    "preserve_upstream_notices": true,
+    "original_repository_license_unchanged": true
+  },
+  "toolchain": {
+    "node": "24.15.0",
+    "pnpm": "11.22.0",
+    "source": "mise.toml",
+    "dependency_lock": "pnpm-lock.yaml",
+    "dependencies_installed": false
+  },
+  "local_source": {
+    "path": "build/upstream",
+    "checkout": "shallow filtered sparse detached checkout",
+    "upstream_patches": []
+  },
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 32388,
+      "sha256": "a3bad629f67f442b23b5224419e49edafc32e6b9c876b89464f7aafe6091ccde"
+    },
+    {
+      "path": "packages/cli/LICENSE",
+      "bytes": 32388,
+      "sha256": "a3bad629f67f442b23b5224419e49edafc32e6b9c876b89464f7aafe6091ccde"
+    },
+    {
+      "path": "package.json",
+      "bytes": 443,
+      "sha256": "720b0549417e970462fb7209126ed956476cee08b65be26d3528b26ed34e8522"
+    },
+    {
+      "path": "mise.toml",
+      "bytes": 4663,
+      "sha256": "26293a04de0cb9a418b9720c076d93d6685a9cb0284d924b0739c7c79665da29"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "bytes": 1016494,
+      "sha256": "eaa4368b141376cb00d8752294a9ea38435342394922b8010743e168c47aaf2e"
+    },
+    {
+      "path": "server/package.json",
+      "bytes": 6367,
+      "sha256": "02e3406bbfb6edeef3e1b11e7e8940689f8c0cacc0755215b80c541fb97164cf"
+    },
+    {
+      "path": "open-api/immich-openapi-specs.json",
+      "bytes": 926155,
+      "sha256": "0583d80f74f2f3997e573c618195c4945b399afb00da15570888254e72654d5a"
+    },
+    {
+      "path": "docs/docs/administration/backup-and-restore.md",
+      "bytes": 17994,
+      "sha256": "c6bf3e608fb1248b582e898ad11d313f96228dabb4de86e5c1fc7d9daf242ceb"
+    },
+    {
+      "path": "server/src/app.common.ts",
+      "bytes": 3282,
+      "sha256": "0e96b35f11be0bcfde0d056ff58f7b44f5d6741e18bdd72fa6b262eff1bc6108"
+    },
+    {
+      "path": "server/src/repositories/storage.repository.ts",
+      "bytes": 7848,
+      "sha256": "98302d2627c4bfc2519091cb0126effd6f1b7fe8567bb818e60a022fb90186d5"
+    },
+    {
+      "path": "server/src/services/database-backup.service.ts",
+      "bytes": 20628,
+      "sha256": "e7e85a5d324e5f084e0a94aa5bc3a4f8b5371af9b1b581301b110a87d44e2f8b"
+    },
+    {
+      "path": "server/src/controllers/database-backup.controller.ts",
+      "bytes": 3957,
+      "sha256": "5061b5a3793ef2e9074cdc51bc6d113bbef52ebcd78d0e04fdb6eae29a810039"
+    },
+    {
+      "path": "server/src/utils/database-backups.ts",
+      "bytes": 865,
+      "sha256": "381698d7719b352cf9ed1ed3c293fabfccae266ecdfb226a3c65dee594ee413c"
+    },
+    {
+      "path": "server/src/dtos/database-backup.dto.ts",
+      "bytes": 1109,
+      "sha256": "62d1bf3ea34a950cdf0fbf275d26eb4df188a6b84884c5f596fd93b392614a6e"
+    },
+    {
+      "path": "server/src/controllers/job.controller.ts",
+      "bytes": 2492,
+      "sha256": "83e306ba39e6b1b8f14b43eed4366537701d7ac7eb49d935af3a684ec90cbf6c"
+    },
+    {
+      "path": "server/src/services/job.service.ts",
+      "bytes": 9439,
+      "sha256": "d11a9dd45273dafbd211296d08f689834f40b92d3f36627fc2a13fd908972c90"
+    },
+    {
+      "path": "server/src/dtos/job.dto.ts",
+      "bytes": 288,
+      "sha256": "78f4eb630606504e03d2825c0629c38ee276d1f1fdb759c13e1ecae2c435848f"
+    },
+    {
+      "path": "server/src/enum.ts",
+      "bytes": 33766,
+      "sha256": "3b42a0240a9b329b4d84a6a5ebdf2344e8803883d6a74f10a071581ec0d21f7c"
+    },
+    {
+      "path": "server/src/controllers/maintenance.controller.ts",
+      "bytes": 3008,
+      "sha256": "c8c038766c4ac8851797ea4e39d79cfdbef82fd67165ccc9cb663944b47bc83f"
+    },
+    {
+      "path": "server/src/maintenance/maintenance-worker.controller.ts",
+      "bytes": 4450,
+      "sha256": "de921033eadf9982233cbbbcdf7283024b9c0baf23cc829d25f1179d38e8bc62"
+    },
+    {
+      "path": "server/src/services/auth.service.ts",
+      "bytes": 23278,
+      "sha256": "58c8a233f7637785d2d0b1c10c16e75097041310167badebea5134d149526dd1"
+    },
+    {
+      "path": "server/src/controllers/asset-media.controller.ts",
+      "bytes": 6965,
+      "sha256": "49710abe46a5481ad036e1ce5a072e83b5ccb084b50d8a0a1992633c92648e9b"
+    },
+    {
+      "path": "server/src/controllers/download.controller.ts",
+      "bytes": 1911,
+      "sha256": "8ba8078278f99db563f7d5fd32625aaab6561d7e752adef6b6a6b562f0d75b68"
+    },
+    {
+      "path": "server/src/controllers/sync.controller.ts",
+      "bytes": 2975,
+      "sha256": "a32368014bf85d4beae87a436d7d6f5ecad9f01417113984edc6aae7d479663e"
+    },
+    {
+      "path": "server/src/controllers/shared-link.controller.ts",
+      "bytes": 6114,
+      "sha256": "89fe924bb171a01ae4f2b8d0ea27df261220573386fe5e49583413c983f1c13f"
+    },
+    {
+      "path": "server/src/repositories/machine-learning.repository.ts",
+      "bytes": 7506,
+      "sha256": "0e2bdb6e89e963aa39b14ae57ce1e7f720ccc37f08822ed8d4e36f4374751e7b"
+    },
+    {
+      "path": "mobile/lib/services/api.service.dart",
+      "bytes": 6711,
+      "sha256": "d2e538cd6c8ccb53f845e5fddec177daf8ee0eaab2ae4f1cb8b2d01dfb02ced5"
+    },
+    {
+      "path": "mobile/lib/infrastructure/repositories/sync_api.repository.dart",
+      "bytes": 8561,
+      "sha256": "2aa459145795e607289921eafcf774cb32419260d3dffb27c0ab05bcc6374afe"
+    },
+    {
+      "path": "mobile/lib/presentation/widgets/images/remote_image_provider.dart",
+      "bytes": 6805,
+      "sha256": "47fc6dcc9495748e3c31f5fd21771b207223d8d979ba106894376988676fe02d"
+    },
+    {
+      "path": "mobile/lib/infrastructure/repositories/network.repository.dart",
+      "bytes": 2139,
+      "sha256": "240aa435d324feb1cb93be0bc2489678131c338c30e7c8667dd9c4bd9e872377"
+    },
+    {
+      "path": "mobile/lib/domain/services/background_worker.service.dart",
+      "bytes": 13623,
+      "sha256": "2bf518fca6dd303493fc0685680efb0356df4a80c052f6dafd28a29174c4c09a"
+    },
+    {
+      "path": "mobile/ios/Runner/Background/BackgroundWorker.swift",
+      "bytes": 7180,
+      "sha256": "8708401abb3264c5301041786e53ac6d47fd8648adf9a3452f7ff549db61ef74"
+    },
+    {
+      "path": "mobile/android/app/src/main/kotlin/app/alextran/immich/background/BackgroundWorker.kt",
+      "bytes": 8851,
+      "sha256": "dfcbf2e8ca478ea0c4c2b1bd741ac11cc456f14c514ae65523591ce7ab2459fa"
+    },
+    {
+      "path": "web/src/lib/utils/server.ts",
+      "bytes": 874,
+      "sha256": "76443a0a828ca6e503c25704db25ec0f6995a3954cb8c2c6f33ab13073489936"
+    },
+    {
+      "path": "packages/sdk/src/fetch-client.ts",
+      "bytes": 225681,
+      "sha256": "46b432b95393010aaf68ff72aef6546d7d5a832b75a215884e2106079b12dd81"
+    },
+    {
+      "path": "packages/sdk/src/index.ts",
+      "bytes": 2487,
+      "sha256": "c7e25c650368fd997146ee11b032d751115089a831af131b55d645f01756d08b"
+    },
+    {
+      "path": "web/src/lib/stores/websocket.ts",
+      "bytes": 4590,
+      "sha256": "113144ed141c2153401c5610dafbb148c5b9a1201308bad96610515e3a716bf1"
+    },
+    {
+      "path": "web/src/lib/managers/auth-manager.svelte.ts",
+      "bytes": 2939,
+      "sha256": "0523849484d54e863993c8106845e32e213181abc1bffe4d618da7a5ff1bb690"
+    }
+  ]
+}
