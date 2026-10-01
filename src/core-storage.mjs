@@ -8,6 +8,10 @@ import { dirname, isAbsolute, normalize, sep } from 'node:path';
 
 const ARCHIVE_MAX = 64 * 1024 ** 3;
 const REPORT_MAX = 2 * 1024 ** 2;
+const CORE_CREATE_COPIES = 2; // Core policy contract, not an application-selectable tier.
+const COPY_HISTORY_MAX = 8;
+const REPAIR_FIELDS = ['placement_authorizations', 'retained_copy_records', 'pending_retirements',
+  'desired_copies_per_fragment', 'replacement_overhead_included'];
 const HASH = /^[a-f0-9]{64}$/;
 const OPERATIONS = new Set(['create', 'deposit', 'status', 'progress', 'restore', 'renew', 'delete']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
@@ -96,7 +100,7 @@ function configuration(raw) {
     return Object.freeze({ key: provider.key, grant: absolute(provider.grant) });
   });
   requireThat(new Set(providers.map(provider => provider.key)).size === providers.length
-    && integer(raw.copies, 2, providers.length - 1)
+    && (!Object.hasOwn(raw, 'copies') || raw.copies === CORE_CREATE_COPIES)
     && integer(raw.fragmentBytes, 1, 1024 ** 3)
     && integer(raw.lifetimeSeconds, 1, 2678400)
     && integer(raw.deadlineMs ?? 1800000, 100, 1800000));
@@ -112,51 +116,83 @@ function summary(raw, operation) {
   const count = raw.fragment_count;
   const copies = raw.copies_per_fragment;
   const providerCount = raw.distinct_provider_identities;
-  check(integer(providerCount, 3, 8) && integer(copies, 2, providerCount - 1)
-    && integer(logical, providerCount, ARCHIVE_MAX) && integer(count, providerCount, 256));
+  const repaired = raw.report_version === 2;
+  check(!Object.hasOwn(raw, 'report_version') || repaired);
+  check(repaired || REPAIR_FIELDS.every(key => !Object.hasOwn(raw, key)));
+  check(integer(copies, 2, 7) && integer(count, 3, 256) && integer(logical, count, ARCHIVE_MAX));
+  check(integer(providerCount, 3, repaired ? 8 + count * (COPY_HISTORY_MAX - copies) : 8));
+  if (!repaired) check(count >= providerCount && copies < providerCount);
+  // An old retained archive may have more copies; newly created archives may not.
+  if (operation === 'create') check(!repaired && copies === CORE_CREATE_COPIES);
   check(FALSE_FLAGS.every(key => raw[key] === false)
     && raw.expired_copies_remain_charged === true && raw.owner_signature_verified === true);
   const amounts = ['reserved_payload_bytes', 'committed_payload_bytes', 'uncertain_payload_bytes'];
-  check(amounts.every(key => integer(raw[key], 0, logical * copies)));
+  const chargeLimit = logical * (repaired ? COPY_HISTORY_MAX : copies);
+  check(amounts.every(key => integer(raw[key], 0, chargeLimit)));
   const total = amounts.reduce((sum, key) => sum + raw[key], 0);
-  check(total <= logical * copies && raw.physical_payload_charge_upper_bound === total);
+  check(total <= chargeLimit && raw.physical_payload_charge_upper_bound === total);
   check(Array.isArray(raw.providers) && raw.providers.length === providerCount
     && Array.isArray(raw.fragments) && raw.fragments.length === count);
   const providers = new Map();
   for (const provider of raw.providers) {
     check(object(provider) && HASH.test(provider.provider_key) && !providers.has(provider.provider_key)
       && integer(provider.physical_payload_charge_upper_bound, 0, logical));
-    providers.set(provider.provider_key, { declared: provider.physical_payload_charge_upper_bound, charge: 0 });
+    providers.set(provider.provider_key, { declared: provider.physical_payload_charge_upper_bound, charge: 0, records: 0 });
   }
   let offset = 0;
   let recoverable = 0;
   let redundant = 0;
+  let retainedCopies = 0;
+  let extendedFragments = 0;
+  const originalProviders = new Set();
   const charges = { reserved: 0, committed: 0, uncertain: 0 };
   raw.fragments.forEach((fragment, index) => {
     check(object(fragment) && fragment.index === index && fragment.offset === offset
       && integer(fragment.ciphertext_bytes, 1, 1024 ** 3)
-      && integer(fragment.confirmed_unexpired_copies, 0, copies)
-      && Array.isArray(fragment.copies) && fragment.copies.length === copies);
+      && Array.isArray(fragment.copies)
+      && integer(fragment.copies.length, copies, repaired ? COPY_HISTORY_MAX : copies)
+      && integer(fragment.confirmed_unexpired_copies, 0, fragment.copies.length));
     offset += fragment.ciphertext_bytes;
+    retainedCopies += fragment.copies.length;
+    extendedFragments += Number(fragment.copies.length > copies);
     recoverable += Number(fragment.confirmed_unexpired_copies > 0);
-    redundant += Number(fragment.confirmed_unexpired_copies === copies);
+    redundant += Number(fragment.confirmed_unexpired_copies >= copies);
     const distinct = new Set();
     let committedCopies = 0;
     for (const copy of fragment.copies) {
       check(object(copy) && providers.has(copy.provider_key) && !distinct.has(copy.provider_key)
         && ['unattempted', 'reserved', 'committed', 'uncertain', 'deleted'].includes(copy.charge));
       distinct.add(copy.provider_key);
+      providers.get(copy.provider_key).records++;
       if (Object.hasOwn(charges, copy.charge)) {
         charges[copy.charge] += fragment.ciphertext_bytes;
         providers.get(copy.provider_key).charge += fragment.ciphertext_bytes;
       }
       committedCopies += Number(copy.charge === 'committed');
     }
+    for (const copy of fragment.copies.slice(0, copies)) originalProviders.add(copy.provider_key);
     check(fragment.confirmed_unexpired_copies <= committedCopies);
   });
+  // The immutable original plan uses a 3..8-provider rotating pool. Later signed
+  // placements append records/identities; they do not redefine that original root.
+  const originalCount = originalProviders.size;
+  check(integer(originalCount, 3, 8) && copies < originalCount && originalCount <= count
+    && providerCount >= originalCount);
+  check(raw.fragments.every((fragment, index) => fragment.copies.slice(0, copies).every((copy, position) =>
+    copy.provider_key === raw.providers[(index + position) % originalCount].provider_key)));
+  if (repaired) {
+    const authorizations = retainedCopies - count * copies;
+    check(integer(authorizations, 1, count * (COPY_HISTORY_MAX - copies))
+      && raw.placement_authorizations === authorizations
+      && raw.retained_copy_records === retainedCopies
+      && raw.desired_copies_per_fragment === copies
+      && integer(raw.pending_retirements, 0, extendedFragments)
+      && raw.replacement_overhead_included === true
+      && providerCount <= originalCount + authorizations);
+  } else check(providerCount === originalCount);
   check(offset === logical && recoverable === raw.fragments_with_confirmed_unexpired_copy
     && raw.fully_redundant_from_retained_receipts === (redundant === count)
-    && [...providers.values()].every(provider => provider.charge === provider.declared)
+    && [...providers.values()].every(provider => provider.records > 0 && provider.charge === provider.declared)
     && charges.reserved === raw.reserved_payload_bytes && charges.committed === raw.committed_payload_bytes
     && charges.uncertain === raw.uncertain_payload_bytes);
   const local = operation === 'create' || operation === 'status';
@@ -174,6 +210,10 @@ function summary(raw, operation) {
     expired_copies_remain_charged: true, owner_signature_verified: true,
   };
   for (const key of FALSE_FLAGS) result[key] = false;
+  if (repaired) {
+    result.report_version = 2;
+    for (const key of REPAIR_FIELDS) result[key] = raw[key];
+  }
   return Object.freeze(result);
 }
 
@@ -267,7 +307,7 @@ export class CoreStorage {
           const length = (await input.stat()).size;
           const size = Math.min(config.fragmentBytes, Math.floor(length / config.providers.length));
           requireThat(size > 0 && Math.ceil(length / size) <= 256, 'invalid_fragment_plan');
-          args.push('--sha256', request.sha256, '--copies', String(config.copies),
+          args.push('--sha256', request.sha256,
             '--fragment-bytes', String(config.fragmentBytes), '--lifetime-seconds', String(config.lifetimeSeconds));
           for (const provider of config.providers) {
             retained.push(await privateFile(provider.grant, 2048));

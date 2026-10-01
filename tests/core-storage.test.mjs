@@ -16,36 +16,36 @@ const KEYS = ['11'.repeat(32), '22'.repeat(32), '33'.repeat(32)];
 const CONTENT = Buffer.from('synthetic already-encrypted fixture bytes: opaque to this bridge');
 const SHA = createHash('sha256').update(CONTENT).digest('hex');
 
-function coreReport(operation, charge = 'committed', complete = true) {
+function coreReport(operation, charge = 'committed', complete = true, { keys = KEYS, copiesPerFragment = 2 } = {}) {
   const fragments = [];
-  const amounts = KEYS.map(() => 0);
+  const amounts = keys.map(() => 0);
   const charged = ['reserved', 'committed', 'uncertain'].includes(charge);
   let offset = 0;
-  for (let index = 0; index < 3; index++) {
-    const bytes = index === 2 ? CONTENT.length - offset : Math.floor(CONTENT.length / 3);
-    const copies = [0, 1].map(copy => {
-      const provider = (index + copy) % 3;
+  for (let index = 0; index < keys.length; index++) {
+    const bytes = index === keys.length - 1 ? CONTENT.length - offset : Math.floor(CONTENT.length / keys.length);
+    const copies = Array.from({ length: copiesPerFragment }, (_, copy) => {
+      const provider = (index + copy) % keys.length;
       if (charged) amounts[provider] += bytes;
-      return { provider_key: KEYS[provider], charge, last_confirmed_stored_bytes: bytes,
+      return { provider_key: keys[provider], charge, last_confirmed_stored_bytes: bytes,
         last_confirmed_expiry: 3000000000, last_confirmed_state: charge === 'committed' ? 'Committed' : null };
     });
-    fragments.push({ index, offset, ciphertext_bytes: bytes, confirmed_unexpired_copies: charge === 'committed' ? 2 : 0, copies });
+    fragments.push({ index, offset, ciphertext_bytes: bytes, confirmed_unexpired_copies: charge === 'committed' ? copiesPerFragment : 0, copies });
     offset += bytes;
   }
   const raw = {
     operation: `private_storage_fragments_${operation}`, logical_ciphertext_bytes: CONTENT.length,
-    fragment_count: 3, copies_per_fragment: 2, distinct_provider_identities: 3,
-    reserved_payload_bytes: charge === 'reserved' ? CONTENT.length * 2 : 0,
-    committed_payload_bytes: charge === 'committed' ? CONTENT.length * 2 : 0,
-    uncertain_payload_bytes: charge === 'uncertain' ? CONTENT.length * 2 : 0,
-    physical_payload_charge_upper_bound: charged ? CONTENT.length * 2 : 0,
+    fragment_count: keys.length, copies_per_fragment: copiesPerFragment, distinct_provider_identities: keys.length,
+    reserved_payload_bytes: charge === 'reserved' ? CONTENT.length * copiesPerFragment : 0,
+    committed_payload_bytes: charge === 'committed' ? CONTENT.length * copiesPerFragment : 0,
+    uncertain_payload_bytes: charge === 'uncertain' ? CONTENT.length * copiesPerFragment : 0,
+    physical_payload_charge_upper_bound: charged ? CONTENT.length * copiesPerFragment : 0,
     metadata_overhead_measured: false, expired_copies_remain_charged: true,
-    fragments_with_confirmed_unexpired_copy: charge === 'committed' ? 3 : 0,
+    fragments_with_confirmed_unexpired_copy: charge === 'committed' ? keys.length : 0,
     fully_redundant_from_retained_receipts: charge === 'committed',
     current_remote_availability_proven: false, independent_failure_domains_proven: false,
     network_contribution_credit: false, automatic_repair: false, automatic_handoff: false,
     read_consumes_archive: false, erasure_coding: false, owner_signature_verified: true,
-    providers: KEYS.map((key, index) => ({ provider_key: key, physical_payload_charge_upper_bound: amounts[index] })), fragments,
+    providers: keys.map((key, index) => ({ provider_key: key, physical_payload_charge_upper_bound: amounts[index] })), fragments,
   };
   if (!['create', 'status'].includes(operation)) {
     raw.operation_complete = complete;
@@ -55,6 +55,49 @@ function coreReport(operation, charge = 'committed', complete = true) {
     raw.restored = complete;
     if (complete) raw.whole_archive_sha256_verified = true;
   }
+  return raw;
+}
+
+// Matches the core's additive report v2, not a new app-side placement/accounting format.
+function repairedReport(operation, stage = 'pending', replacements = 1) {
+  const raw = coreReport(operation, 'committed', stage !== 'pending');
+  const fragment = raw.fragments[0];
+  for (let index = 0; index < replacements; index++) {
+    const key = (index + 4).toString(16).padStart(2, '0').repeat(32);
+    fragment.copies.push({ ...fragment.copies[0], provider_key: key });
+    raw.providers.push({ provider_key: key, physical_payload_charge_upper_bound: 0 });
+  }
+  // Previous completed replacements retain deleted history. Only the last retires now.
+  for (let index = 0; index < fragment.copies.length - 1; index++) {
+    if (index !== 1) fragment.copies[index].charge = 'deleted';
+  }
+  const source = fragment.copies[replacements === 1 ? 0 : fragment.copies.length - 2];
+  source.charge = stage === 'complete' || stage === 'deleted' ? 'deleted'
+    : stage === 'pending' ? 'uncertain' : 'committed';
+  fragment.copies.at(-1).charge = stage === 'planned' ? 'unattempted' : stage === 'reserved' ? 'reserved' : 'committed';
+  raw.reserved_payload_bytes = 0;
+  raw.committed_payload_bytes = 0;
+  raw.uncertain_payload_bytes = 0;
+  for (const provider of raw.providers) provider.physical_payload_charge_upper_bound = 0;
+  for (const part of raw.fragments) {
+    for (const copy of part.copies) {
+      if (stage === 'deleted') copy.charge = 'deleted';
+      copy.last_confirmed_state = copy.charge === 'committed' ? 'Committed' : copy.charge === 'deleted' ? 'Deleted' : null;
+      if (['reserved', 'committed', 'uncertain'].includes(copy.charge)) {
+        raw[`${copy.charge}_payload_bytes`] += part.ciphertext_bytes;
+        raw.providers.find(provider => provider.provider_key === copy.provider_key).physical_payload_charge_upper_bound += part.ciphertext_bytes;
+      }
+    }
+    part.confirmed_unexpired_copies = part.copies.filter(copy => copy.charge === 'committed').length;
+  }
+  raw.physical_payload_charge_upper_bound = raw.reserved_payload_bytes + raw.committed_payload_bytes + raw.uncertain_payload_bytes;
+  raw.distinct_provider_identities = raw.providers.length;
+  raw.fragments_with_confirmed_unexpired_copy = raw.fragments.filter(part => part.confirmed_unexpired_copies > 0).length;
+  raw.fully_redundant_from_retained_receipts = raw.fragments.every(part => part.confirmed_unexpired_copies >= raw.copies_per_fragment);
+  Object.assign(raw, { report_version: 2, placement_authorizations: replacements,
+    retained_copy_records: raw.fragments.reduce((total, part) => total + part.copies.length, 0),
+    pending_retirements: stage === 'complete' || stage === 'deleted' ? 0 : 1,
+    desired_copies_per_fragment: raw.copies_per_fragment, replacement_overhead_included: true });
   return raw;
 }
 
@@ -95,7 +138,7 @@ async function setup(t, { existing = true, configChanges = {}, process: selected
   await writeFile(input, CONTENT, { mode: 0o600 });
   const config = { version: 1, coreBinary: process.execPath, controlSocket: socket,
     identity: join(root, 'identity'), passphraseFile: join(root, 'passphrase'), stateDirectory: join(root, 'journal'),
-    providers: KEYS.map((key, index) => ({ key, grant: join(root, `grant${index}`) })), copies: 2,
+    providers: KEYS.map((key, index) => ({ key, grant: join(root, `grant${index}`) })),
     fragmentBytes: 16777216, lifetimeSeconds: 604800, deadlineMs: 30000, ...configChanges };
   if (existing) await mkdir(config.stateDirectory, { mode: 0o700 });
   const configPath = join(root, 'storage.json');
@@ -117,7 +160,7 @@ test('create is explicit encrypted input, exact argv, no inherited environment o
   assert.deepEqual(fixture.calls[0].args, ['--control-socket', fixture.config.controlSocket,
     'storage', 'fragments', 'create', '--state', fixture.config.stateDirectory,
     '--identity', fixture.config.identity, '--passphrase-file', fixture.config.passphraseFile,
-    '--input', fixture.input, '--already-encrypted', '--sha256', SHA, '--copies', '2',
+    '--input', fixture.input, '--already-encrypted', '--sha256', SHA,
     '--fragment-bytes', '16777216', '--lifetime-seconds', '604800',
     ...fixture.config.providers.flatMap(({ key, grant }) => ['--provider-key', key, '--grant', grant])]);
   assert.deepEqual(fixture.calls[0].options.env, { LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' });
@@ -143,6 +186,113 @@ test('incomplete deposit keeps exact state/charged bytes; retry uses no new plac
   assert.deepEqual(fixture.calls[0].args, fixture.calls[1].args);
   assert.ok(!fixture.calls[0].args.includes('--provider-key'));
   assert.equal((await readFile(fixture.input)).equals(CONTENT), true);
+});
+
+test('optional copies=2 is only compatibility and never an application-selected CLI target', async t => {
+  const fixture = await setup(t, { existing: false, configChanges: { copies: 2 } });
+  assert.equal((await fixture.adapter.create({ input: fixture.input, sha256: SHA, alreadyEncrypted: true })).status, 'complete');
+  assert.ok(!fixture.calls[0].args.includes('--copies'));
+  for (const copies of [1, 3, 7, '2', null]) {
+    await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, copies,
+      providers: [...fixture.config.providers, { key: '44'.repeat(32), grant: join(fixture.root, 'grant3') }] }));
+    await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+  }
+});
+
+test('v2 status preserves exact charged history, extra confirmed copies and pending retirement', async t => {
+  for (const stage of ['planned', 'reserved', 'verified', 'pending', 'complete', 'deleted']) {
+    const raw = repairedReport('status', stage);
+    const fixture = await setup(t, { process: fakeProcess(async () => ({ raw })) });
+    const result = await fixture.adapter.status();
+    assert.equal(result.status, 'complete', stage);
+    for (const key of ['report_version', 'placement_authorizations', 'retained_copy_records', 'pending_retirements',
+      'desired_copies_per_fragment', 'replacement_overhead_included', 'physical_payload_charge_upper_bound',
+      'reserved_payload_bytes', 'committed_payload_bytes', 'uncertain_payload_bytes']) assert.equal(result.storage[key], raw[key], key);
+    assert.equal(result.storage.copies_per_fragment, 2);
+    assert.equal(result.storage.automatic_repair, false);
+    for (const key of raw.providers.map(provider => provider.provider_key)) assert.ok(!JSON.stringify(result).includes(key));
+  }
+});
+
+test('v2 provider history can exceed both original pool and fragment count', async t => {
+  const raw = repairedReport('status', 'pending', 6);
+  assert.equal(raw.distinct_provider_identities, 9);
+  const fixture = await setup(t, { process: fakeProcess(async () => ({ raw })) });
+  const result = await fixture.adapter.status();
+  assert.equal(result.status, 'complete');
+  assert.equal(result.storage.distinct_provider_identities, 9);
+  assert.equal(result.storage.retained_copy_records, 12);
+  assert.equal(result.storage.physical_payload_charge_upper_bound, CONTENT.length * 2 + raw.fragments[0].ciphertext_bytes);
+});
+
+test('v2 pending retirement remains usable for existing lifecycle operations without re-placement', async t => {
+  const fixture = await setup(t, { process: fakeProcess(async (operation, args) => {
+    const raw = repairedReport(operation, operation === 'delete' ? 'deleted' : 'pending');
+    raw.operation_complete = operation !== 'deposit';
+    if (operation === 'restore') {
+      raw.restored = true;
+      raw.whole_archive_sha256_verified = true;
+      await writeFile(args[args.indexOf('--output') + 1], CONTENT, { mode: 0o600, flag: 'wx' });
+    }
+    return { raw, code: raw.operation_complete ? 0 : 1 };
+  }) });
+  assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).status, 'incomplete');
+  assert.equal((await fixture.adapter.progress()).storage.pending_retirements, 1);
+  assert.equal((await fixture.adapter.renew({ lifetimeSeconds: 1200 })).status, 'complete');
+  for (const name of ['restore-one', 'restore-two']) {
+    const result = await fixture.adapter.restore({ output: join(fixture.root, name), sha256: SHA });
+    assert.equal(result.restore_verified, true);
+    assert.equal(result.storage.pending_retirements, 1);
+  }
+  assert.equal((await fixture.adapter.delete()).storage.physical_payload_charge_upper_bound, 0);
+  for (const call of fixture.calls) {
+    assert.ok(!call.args.includes('--copies') && !call.args.includes('--provider-key'));
+    assert.equal(call.args[call.args.indexOf('--state') + 1], fixture.config.stateDirectory);
+  }
+  assert.ok((await lstat(fixture.config.stateDirectory)).isDirectory());
+});
+
+test('legacy three-copy archives remain readable and restorable without redefining their target', async t => {
+  const keys = [...KEYS, '44'.repeat(32)];
+  const fixture = await setup(t, { process: fakeProcess(async (operation, args) => {
+    if (operation === 'restore') await writeFile(args[args.indexOf('--output') + 1], CONTENT, { mode: 0o600, flag: 'wx' });
+    return { raw: coreReport(operation, operation === 'delete' ? 'deleted' : 'committed', true, { keys, copiesPerFragment: 3 }) };
+  }) });
+  assert.equal((await fixture.adapter.status()).storage.copies_per_fragment, 3);
+  assert.equal((await fixture.adapter.progress()).storage.physical_payload_charge_upper_bound, CONTENT.length * 3);
+  assert.equal((await fixture.adapter.renew({ lifetimeSeconds: 1200 })).storage.copies_per_fragment, 3);
+  const restored = await fixture.adapter.restore({ output: join(fixture.root, 'legacy.pgp'), sha256: SHA });
+  assert.equal(restored.restore_verified, true);
+  assert.equal(restored.storage.copies_per_fragment, 3);
+  assert.equal((await fixture.adapter.delete()).storage.physical_payload_charge_upper_bound, 0);
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+  const newArchive = await setup(t, { existing: false, process: fakeProcess(async operation => ({
+    raw: coreReport(operation, 'unattempted', true, { keys, copiesPerFragment: 3 }),
+  })) });
+  assert.equal((await newArchive.adapter.create({ input: newArchive.input, sha256: SHA, alreadyEncrypted: true })).code, 'invalid_core_report');
+});
+
+test('v2 contradictions, downgrade, invented history or hidden charges fail closed', async t => {
+  const mutations = [raw => { raw.report_version = 3; }, raw => { delete raw.report_version; },
+    raw => { delete raw.placement_authorizations; }, raw => { raw.placement_authorizations++; },
+    raw => { raw.retained_copy_records++; }, raw => { raw.desired_copies_per_fragment = 3; },
+    raw => { raw.pending_retirements = 2; }, raw => { raw.replacement_overhead_included = false; },
+    raw => { raw.uncertain_payload_bytes = 0; raw.physical_payload_charge_upper_bound -= raw.fragments[0].ciphertext_bytes; },
+    raw => { raw.providers.at(-1).physical_payload_charge_upper_bound = 0; },
+    raw => { raw.fragments[0].copies[0].provider_key = raw.fragments[0].copies.at(-1).provider_key; },
+    raw => { raw.fragments[0].confirmed_unexpired_copies = 3; },
+    raw => { raw.owner_signature_verified = false; }, raw => { raw.automatic_repair = true; },
+    raw => { raw.providers.push({ provider_key: 'ee'.repeat(32), physical_payload_charge_upper_bound: 0 }); raw.distinct_provider_identities++; },
+    raw => { raw.fragments[1].copies.reverse(); }];
+  for (const mutate of mutations) {
+    const fixture = await setup(t, { process: fakeProcess(async operation => {
+      const raw = repairedReport(operation); mutate(raw); return { raw };
+    }) });
+    const result = await fixture.adapter.status();
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, 'invalid_core_report');
+    assert.equal(result.storage, null);
+  }
 });
 
 test('status, progress, renew, delete retain operation-specific arguments', async t => {

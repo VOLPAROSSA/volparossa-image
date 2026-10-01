@@ -27,7 +27,8 @@ It never deletes an original snapshot, decryption key, journal or restored file.
 ## Configuration and API
 
 Create a JSON configuration file with mode `0600` in a canonical, same-owner `0700`
-directory. All paths are absolute, without symlinks. The required fields are:
+directory. All paths are absolute, without symlinks. Fields are required unless
+marked optional:
 
 | Field | Meaning |
 | --- | --- |
@@ -38,7 +39,7 @@ directory. All paths are absolute, without symlinks. The required fields are:
 | `passphraseFile` | Existing private core identity passphrase file |
 | `stateDirectory` | Stable per-snapshot reconstruction journal path; absent on create |
 | `providers` | 3–8 distinct explicit `{ "key": "64 lowercase hex digits", "grant": "/absolute/private/grant" }` entries |
-| `copies` | 2–7 copies per fragment, strictly fewer than provider count |
+| `copies` | Optional deprecated compatibility field; only `2` is accepted. Prefer omitting it: new-archive redundancy belongs to the core, not the application. |
 | `fragmentBytes` | Maximum fragment size, 1 byte to 1 GiB |
 | `lifetimeSeconds` | Requested lease duration, 1–2,678,400 seconds, also constrained by grants |
 | `deadlineMs` | Optional operation budget, 100–1,800,000 ms; default 30 minutes |
@@ -96,18 +97,36 @@ provider/grant identities and reservation IDs in its signed reconstruction manif
 Keep `stateDirectory` and the owner's recovery credentials independently recoverable.
 Changing the configuration's provider list does not replace an existing journal's
 immutable placement. `deposit`, `progress`, `restore`, `renew` and `delete` use that
-original state, not a newly generated placement plan. If interrupted during creation,
+original state and its core-authorized replacement history, not a newly generated
+placement plan. If interrupted during creation,
 inspect the original state with `status` before deciding the next action; the bridge
 does not overwrite or automatically recreate it.
+
+New archives use the core's uniform two-copy target; the adapter sends no `--copies`
+argument and rejects a create report with another target. Existing signed archives
+with a higher target remain readable, restorable, renewable and deletable without
+pruning copies or rewriting that target. For an old configuration containing
+`copies` greater than two, remove **only that obsolete configuration field** before
+opening the adapter; do not change the retained archive journal.
 
 Archives are bounded by the core to 64 GiB and at most 256 fragments. The core may
 split smaller than `fragmentBytes` to spread fragments across all chosen providers;
 the adapter rejects plans that would exceed the fragment count. This is redundant
 fragmentation, **not erasure coding**, automatic repair or automatic contribution resizing.
 
+The adapter accepts both original reports and additive **fragment report v2** from
+the core's explicit replacement primitive. V2 separates the desired copy target from
+retained history (up to eight records per fragment), including deleted records and
+replacements on providers outside the original pool. The adapter checks the original
+placement, authorization/history counts and per-copy/per-provider charge totals;
+the core remains responsible for verifying signed authorization. Pending retirement
+does not prevent ordinary lifecycle operations or independently verified restores.
+Image does not initiate replacements or run automatic maintenance.
+
 Interrupted or unconfirmed copies remain charged. The reported physical payload upper
-bound includes reserved, committed and uncertain copies, including expired copies until
-reconciled/deleted. It excludes unmeasured metadata overhead and is **not** measured network
+bound includes reserved, committed and uncertain copies, including temporary replacement
+overlap and expired copies until reconciled/deleted. It can therefore exceed the desired
+target multiplied by the archive size. It excludes unmeasured metadata overhead and is **not** measured network
 contribution credit or proof of currently available storage. Equal contribution and
 safe resizing are core responsibilities, not independent balances created by this adapter.
 
@@ -133,6 +152,9 @@ provider keys, fragment IDs and arbitrary CLI text are not returned. Raw stdout 
 limited to 2 MiB before JSON parsing. Core exit status must agree with its completion
 flag: a useful incomplete report with exit code 1 remains `incomplete`, not success.
 Local validation errors throw `StorageBridgeError` with a closed code and no file paths.
+For v2, the summary also retains `report_version`, `placement_authorizations`,
+`retained_copy_records`, `pending_retirements`, `desired_copies_per_fragment` and
+`replacement_overhead_included`; those fields are not silently downgraded to v1.
 
 `complete` describes the requested operation, not universal availability. In particular,
 `status` only reads retained receipts and `progress` reconciles existing leases;
@@ -156,8 +178,9 @@ node --test tests/core-storage.test.mjs
 ```
 
 The focused tests validate exact CLI arguments, private filesystem requirements,
-same-journal retries, bounded reports, accounting consistency, no-overwrite/readback
-checks and cancellation. Their storage responses are fabricated **test fixtures**.
+same-journal retries, bounded v1/v2 reports, replacement overlap/history accounting,
+uniform new-archive policy, legacy higher-copy lifecycle, no-overwrite/readback checks
+and cancellation. Their storage responses are fabricated **test fixtures**.
 Two tests use a real synthetic Node child solely to verify process termination/join.
 They do not run the Rust core, storage peers, protected network paths or Immich.
 Actual peer-backed snapshot deposit, source-independent restore and application/mobile
