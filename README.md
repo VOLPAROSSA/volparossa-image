@@ -6,8 +6,9 @@ The goal: manage, back up and share your photos and videos without maintaining a
 server that must stay online. Your devices retain control of keys and private data;
 VOLPAROSSA supplies cooperative storage, connectivity and eligible background work.
 
-> Initial integration work. This repository is not yet a working server-independent
-> Immich application. Existing storage proofs in the core do not prove this integration.
+> Development integration, not yet a working server-independent Immich application.
+> A scoped encrypted-snapshot/peer-recovery trial passes; live library operation and
+> mobile integration remain unfinished.
 
 **Target clients: Android, iPhone/iPad and the web browser.** The shared core/data
 contract comes first; a working web-only version would not complete the mobile scope.
@@ -59,9 +60,17 @@ Three connected development components are available:
    supplying the owner's key and decrypting remain separate operations.
 
 Do not upload the entire snapshot bundle: only `snapshot.pgp` belongs on storage peers,
-never `recovery.key`. A real combined peer deposit/restore and a running restored Immich
-library remain the next proofs. Keep originals until independently verified recovery and
-an explicit owner decision to remove them.
+never `recovery.key`. Keep originals until independently verified recovery and an explicit
+owner decision to remove them.
+
+The [combined peer snapshot trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039)
+passes on exact Image `e177afebabd99ac0773de2a73d60275346a5de52` and core
+`cf4de524ce885af95d0f75fcb53d80254486c27f`: a synthetic encrypted snapshot is spread
+as eight fragment copies over three providers, provider A is stopped, and B/C supply
+two complete decryptions/restores. All-copy deletion and private/network cleanup pass.
+This proves that pinned snapshot/storage slice, **not the newer Node adapter**, a
+running restored Immich library, device synchronization or server-independent mobile use.
+Those application paths still require their own functional proofs.
 
 See [upstream pin and source boundaries](docs/UPSTREAM.md) and
 [Android, iOS and web integration points](docs/CLIENT_INTEGRATION.md).

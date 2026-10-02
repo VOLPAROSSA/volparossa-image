@@ -183,5 +183,10 @@ uniform new-archive policy, legacy higher-copy lifecycle, no-overwrite/readback 
 and cancellation. Their storage responses are fabricated **test fixtures**.
 Two tests use a real synthetic Node child solely to verify process termination/join.
 They do not run the Rust core, storage peers, protected network paths or Immich.
-Actual peer-backed snapshot deposit, source-independent restore and application/mobile
-integration require separate functional evidence before being called working.
+The separate [peer-backed snapshot trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039)
+passes with older Image `e177afebabd99ac0773de2a73d60275346a5de52` and core
+`cf4de524ce885af95d0f75fcb53d80254486c27f`: eight fragment copies, provider A offline,
+two B/C restores and actual GPG decryption, followed by complete deletion/cleanup.
+That evidence does not cover this newer Node/report-v2 adapter or a running Immich
+library. Joined proof for the current adapter and application/mobile integration
+remain required before those paths are called working.
