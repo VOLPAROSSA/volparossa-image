@@ -1,3 +1,5 @@
+![VOLPAROSSA Image banner with photographs developing in a warmly lit darkroom](docs/assets/banner-volparossa-image.png)
+
 # Project VOLPAROSSA Image
 
 **Immich connected to the VOLPAROSSA Decentralized Intelligent Cooperative Network.**
