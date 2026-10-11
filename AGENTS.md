@@ -14,6 +14,12 @@
   restore into a new owner-controlled location, not over an existing installation.
 - Pin upstream Immich by exact release commit; preserve its AGPL license and notices.
   Do not relabel imported upstream code as this repository's original GPL code.
-- No automatic model/runtime downloads, installation, host networking changes or background
-  participation on opening the project. Disposable tests use synthetic lawful media only.
+- Opening the project must not trigger model/runtime downloads, installation or background
+  participation. Do not change host networking. Do not download/install models, runtimes
+  or software on the development host without explicit authorization.
+- Develop product model/runtime distribution and release updates under the core's
+  pre-established authorization. Verify provenance, authenticity and integrity, enforce
+  privacy and resource limits, and do not expand permissions. This does not authorize
+  installation on the development host or make an unimplemented update facility complete.
+- Disposable tests use synthetic lawful media only.
 - Use targeted checks, actual integration evidence, bounded resource use and honest status.
