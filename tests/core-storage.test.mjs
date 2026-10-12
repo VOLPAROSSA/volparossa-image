@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { CoreStorage } from '../src/core-storage.mjs';
+import { runSnapshotStorage } from '../scripts/snapshot-storage.mjs';
 
 const KEYS = ['11'.repeat(32), '22'.repeat(32), '33'.repeat(32)];
 const CONTENT = Buffer.from('synthetic already-encrypted fixture bytes: opaque to this bridge');
@@ -460,4 +461,307 @@ test('real synthetic child deadline requests termination and waits for close', a
   assert.equal(result.status, 'timed_out');
   assert.equal(result.local_process_joined, true);
   assert.equal(result.storage, null);
+});
+
+function checkpoint(stage = 'waiting_for_core', turns = 0) {
+  return { version: 1, scope: 'owner-private-maintenance', stage, turns, at: Math.floor(Date.now() / 1000),
+    detail: { private_path: 'DO-NOT-EXPORT' }, core_coordinated: true, new_network_node: false,
+    automatic_grant_refresh: false, private_key_exported: false };
+}
+
+// Actual inert Node children exercise process ownership; the simulated core responses
+// below do NOT establish Rust signatures, protected storage or repair functionality.
+async function maintenanceFixture(t, { worker = '', foreground, maximumTurns, failedClose = false, foregroundWorker, terminationCode = 0 } = {}) {
+  let fixture;
+  t.after(async () => {
+    if (failedClose) await assert.rejects(fixture.adapter.close(), { code: 'maintenance_cleanup_unconfirmed' });
+    else await fixture?.adapter.close();
+  });
+  const calls = [], children = [], order = [];
+  let latest = checkpoint();
+  const oneShot = fakeProcess(async (operation, args) => {
+    if (operation === 'maintenance') {
+      if (args[5] === 'enroll') {
+        await mkdir(fixture.enrollment, { mode: 0o700 });
+        await fixture.writeEnrollment();
+        latest = checkpoint('enrolled');
+      }
+      return { raw: latest };
+    }
+    order.push(operation);
+    if (foreground) return foreground(operation, args, fixture);
+    if (operation === 'restore') await writeFile(args[args.indexOf('--output') + 1], CONTENT, { mode: 0o600, flag: 'wx' });
+    return { raw: coreReport(operation) };
+  });
+  const spawnProcess = (binary, args, options) => {
+    calls.push({ binary, args, options });
+    if (args[4] !== 'maintenance' && foregroundWorker) return foregroundWorker(binary, args, options, fixture);
+    if (args[4] !== 'maintenance' || args[5] !== 'serve') return oneShot.spawnProcess(binary, args, options);
+    order.push('serve');
+    const source = `process.on('SIGTERM',()=>process.exit(${terminationCode}));
+      process.stdout.write(process.argv[1]+'\\n');
+      setInterval(()=>{},1000); ${worker}`;
+    const child = spawn(process.execPath, ['-e', source, JSON.stringify(checkpoint())], options);
+    child.receivedBytes = 0;
+    child.stdout.on('data', chunk => { child.receivedBytes += chunk.length; });
+    child.ready = new Promise(resolve => child.stdout.once('data', resolve));
+    child.once('close', () => order.push('joined'));
+    children.push(child);
+    return child;
+  };
+  fixture = await setup(t, { process: { spawnProcess, calls } });
+  fixture.enrollment = join(fixture.root, 'maintenance');
+  fixture.writeEnrollment = async changes => {
+    const now = Math.floor(Date.now() / 1000);
+    await writeFile(join(fixture.enrollment, 'enrollment.json'), JSON.stringify({
+      enrollment: { version: 1, created: now - 10, expires: now + 600, archive: fixture.config.stateDirectory,
+        ...changes }, signature: 'synthetic-only-not-a-core-signature',
+    }), { mode: 0o600 });
+  };
+  await mkdir(fixture.enrollment, { mode: 0o700 });
+  await fixture.writeEnrollment();
+  await writeFile(join(fixture.config.stateDirectory, 'retained'), 'same-private-journal', { mode: 0o600 });
+  fixture.request = { enrollment: fixture.enrollment, ...(maximumTurns === undefined ? {} : { maximumTurns }) };
+  return Object.assign(fixture, { children, order, latest: value => { latest = value; },
+    async start(options) { const handle = await fixture.adapter.startMaintenance(fixture.request, options); await children.at(-1).ready; return handle; } });
+}
+
+test('finite maintenance enrollment forwards only explicit owner scope; no network/socket precondition', async t => {
+  const f = await maintenanceFixture(t);
+  await rm(f.enrollment, { recursive: true });
+  const request = { enrollment: f.enrollment, fromProviderKey: KEYS[0], providers: f.config.providers.slice(1),
+    authorizationSeconds: 600, lifetimeSeconds: 300, renewBeforeSeconds: 60,
+    maximumChargedBytes: 4096, maximumTurnBytes: 1048576 };
+  const result = await f.adapter.enrollMaintenance(request);
+  assert.equal(result.status, 'complete');
+  assert.equal(result.checkpoint.stage, 'enrolled');
+  const args = f.calls[0].args;
+  assert.deepEqual(args.slice(2, 6), ['storage', 'fragments', 'maintenance', 'enroll']);
+  for (const [flag, expected] of [['--authorization-seconds', '600'], ['--maximum-charged-bytes', '4096'],
+    ['--maximum-turn-bytes', '1048576'], ['--from-provider-key', KEYS[0]], ['--state', f.config.stateDirectory]]) {
+    assert.equal(args[args.indexOf(flag) + 1], expected);
+  }
+  assert.equal(args.filter(value => value === '--provider-key').length, 2);
+  assert.ok(!JSON.stringify(result).includes(f.root));
+  assert.ok(!JSON.stringify(result).includes('DO-NOT-EXPORT'));
+  assert.ok(!args.includes('recovery.key'));
+  for (const changes of [{ authorizationSeconds: 0 }, { maximumTurnBytes: 134217729 },
+    { providers: [f.config.providers[0]] }, { providers: [f.config.providers[1], f.config.providers[1]] },
+    { enrollment: join(f.config.stateDirectory, 'nested') }, { automaticRenewal: true }]) {
+    await assert.rejects(f.adapter.enrollMaintenance({ ...request, ...changes }));
+  }
+});
+
+test('maintenance owns a real child while status stays distinct from stale checkpoint; stop joins without deleting state', async t => {
+  const f = await maintenanceFixture(t);
+  // No contact with a missing core is attempted by the app-side preflight.
+  await rm(f.config.controlSocket);
+  const original = await readFile(join(f.enrollment, 'enrollment.json'));
+  const handle = await f.start();
+  const status = await handle.status();
+  assert.equal(status.owned_process_running, true);
+  assert.equal(status.local_process_joined, false);
+  assert.equal(status.checkpoint.stage, 'waiting_for_core');
+  assert.ok(!JSON.stringify(status).includes('DO-NOT-EXPORT'));
+  await assert.rejects(f.adapter.startMaintenance(f.request), { code: 'maintenance_in_progress' });
+  const stopped = await handle.stop();
+  assert.equal(stopped.local_process_joined, true);
+  assert.equal(stopped.remote_cleanup_confirmed, false);
+  assert.equal(f.children[0].exitCode, 0);
+  assert.equal(await handle.done, stopped);
+  assert.equal((await f.adapter.maintenanceStatus(f.request)).owned_process_running, false);
+  assert.deepEqual(await readFile(join(f.enrollment, 'enrollment.json')), original);
+  assert.equal(await readFile(join(f.config.stateDirectory, 'retained'), 'utf8'), 'same-private-journal');
+});
+
+test('same-fd enrollment growth is rejected before allocating beyond the bounded JSON record', async t => {
+  const f = await maintenanceFixture(t);
+  const enrollmentFile = join(f.enrollment, 'enrollment.json');
+  const inode = (await lstat(enrollmentFile)).ino;
+  const handle = await open(enrollmentFile, 'r');
+  const prototype = Object.getPrototypeOf(handle);
+  await handle.close();
+  const originalStat = prototype.stat;
+  let grew = false, oversizedAllocation = false;
+  t.mock.method(prototype, 'stat', async function (options) {
+    const value = await originalStat.call(this, options);
+    if (!grew && !options?.bigint && value.ino === inode) {
+      // Real bytes grow after privateFile's first same-fd stat, before privateJSON's second.
+      grew = true;
+      await writeFile(enrollmentFile, Buffer.alloc(32769, 120));
+    }
+    return value;
+  });
+  const allocate = Buffer.alloc;
+  t.mock.method(Buffer, 'alloc', (size, ...args) => {
+    if (size === 32770) oversizedAllocation = true;
+    return allocate(size, ...args);
+  });
+  await assert.rejects(f.adapter.startMaintenance(f.request), { code: 'private_file_required' });
+  assert.equal(grew, true);
+  assert.equal(oversizedAllocation, false);
+  assert.equal(f.children.length, 0);
+});
+
+test('Image snapshot restore joins maintenance before archive use then resumes the identical finite session', async t => {
+  const f = await maintenanceFixture(t, { maximumTurns: 8 });
+  const handle = await f.start();
+  f.latest(checkpoint('paused', 3));
+  const receipt = { version: 1, kind: 'volparossa-immich-snapshot', cipher_file: 'snapshot.pgp',
+    cipher_sha256: SHA, cipher_bytes: CONTENT.length, encryption: 'OpenPGP-AES256',
+    source_consistency: 'operator-asserted-quiesced-copy' };
+  const receiptPath = join(f.root, 'original-receipt.json');
+  await writeFile(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
+  const output = join(f.root, 'restored');
+  const result = await runSnapshotStorage({ operation: 'restore', config: f.configPath, receipt: receiptPath, output },
+    { storageFactory: async () => f.adapter });
+  await f.children[1].ready;
+  assert.equal(result.restore_verified, true);
+  assert.deepEqual(await readFile(join(output, 'snapshot.pgp')), CONTENT);
+  assert.deepEqual(JSON.parse(await readFile(join(output, 'receipt.json'), 'utf8')), receipt);
+  assert.equal(result.snapshot_decrypted, false);
+  assert.equal(result.immich_restore_proven, false);
+  assert.deepEqual(f.order, ['serve', 'joined', 'restore', 'serve']);
+  const serves = f.calls.filter(call => call.args[5] === 'serve');
+  assert.equal(serves.length, 2);
+  assert.equal(serves[0].args[serves[0].args.indexOf('--maximum-turns') + 1], '8');
+  assert.equal(serves[1].args[serves[1].args.indexOf('--maximum-turns') + 1], '5');
+  assert.equal(serves[0].args[7], serves[1].args[7]);
+  assert.ok(f.calls.every(call => call.args[5] !== 'enroll'));
+  await handle.stop();
+});
+
+test('unsuccessful foreground or delete never restarts maintenance or clears journals', async t => {
+  for (const operation of ['progress', 'delete']) {
+    const f = await maintenanceFixture(t, { foreground: async name => ({
+      raw: coreReport(name, name === 'delete' ? 'deleted' : 'uncertain', name === 'delete'),
+      code: name === 'delete' ? 0 : 1,
+    }) });
+    const handle = await f.start();
+    const result = await f.adapter[operation]();
+    assert.equal(result.status, operation === 'delete' ? 'complete' : 'incomplete');
+    assert.equal(f.children.length, 1);
+    assert.equal((await handle.done).code, 'foreground_not_resumed');
+    assert.equal(await readFile(join(f.config.stateDirectory, 'retained'), 'utf8'), 'same-private-journal');
+  }
+});
+
+test('changed or expired enrollment prevents foreground resume without granting new authority', async t => {
+  for (const changes of [{ changed: true }, { expires: Math.floor(Date.now() / 1000) - 1 }]) {
+    const f = await maintenanceFixture(t, { foreground: async (operation, _args, fixture) => {
+      await fixture.writeEnrollment(changes);
+      return { raw: coreReport(operation) };
+    } });
+    const handle = await f.start();
+    assert.equal((await f.adapter.status()).status, 'complete');
+    assert.equal(f.children.length, 1);
+    assert.equal((await handle.done).code, 'resume_unavailable');
+  }
+});
+
+test('a session exhausts its original turn allowance across foreground work without creating another process', async t => {
+  const f = await maintenanceFixture(t, { maximumTurns: 3 });
+  const handle = await f.start();
+  f.latest(checkpoint('paused', 3));
+  assert.equal((await f.adapter.status()).status, 'complete');
+  assert.equal((await handle.done).code, 'turn_limit');
+  assert.equal(f.children.length, 1);
+});
+
+test('finite enrollment expiration stops and joins the owned background process', async t => {
+  const f = await maintenanceFixture(t);
+  await f.writeEnrollment({ expires: Math.floor(Date.now() / 1000) + 2 });
+  const handle = await f.start();
+  const result = await handle.done;
+  assert.equal(result.code, 'enrollment_expired');
+  assert.equal(result.status, 'stopped');
+  assert.equal(f.children[0].exitCode, 0);
+  assert.equal(f.children.length, 1);
+});
+
+test('session cancellation and adapter close join their own process, no implicit reopen', async t => {
+  const f = await maintenanceFixture(t);
+  const owner = new AbortController();
+  const handle = await f.start({ signal: owner.signal });
+  owner.abort();
+  assert.equal((await handle.done).code, 'cancelled');
+  assert.equal(f.children[0].exitCode, 0);
+  const closing = f.adapter.close();
+  assert.equal(f.adapter.close(), closing);
+  await closing;
+  await assert.rejects(f.adapter.status(), { code: 'storage_closed' });
+  await assert.rejects(f.adapter.startMaintenance(f.request), { code: 'storage_closed' });
+});
+
+test('failed maintenance stop prevents foreground and remains a rejected close even after the session ended', async t => {
+  const f = await maintenanceFixture(t, { failedClose: true, terminationCode: 7 });
+  const handle = await f.start();
+  await assert.rejects(f.adapter.progress(), { code: 'maintenance_cleanup_unconfirmed' });
+  assert.equal((await handle.done).status, 'failed');
+  assert.equal(f.children[0].exitCode, 7);
+  assert.deepEqual(f.order, ['serve', 'joined']);
+  await assert.rejects(f.adapter.progress(), { code: 'maintenance_cleanup_unconfirmed' });
+  const closing = f.adapter.close();
+  assert.equal(f.adapter.close(), closing);
+  await assert.rejects(closing, { code: 'maintenance_cleanup_unconfirmed' });
+});
+
+test('close during foreground cancels and joins that owned child without resuming maintenance', async t => {
+  let ready, foregroundChild;
+  const started = new Promise(resolve => { ready = resolve; });
+  const f = await maintenanceFixture(t, { foregroundWorker: (_binary, _args, options) => {
+    foregroundChild = spawn(process.execPath, ['-e', `process.stdout.write('ready'); setInterval(()=>{},1000);`], options);
+    foregroundChild.stdout.once('data', ready);
+    return foregroundChild;
+  } });
+  const handle = await f.start();
+  const pending = f.adapter.progress();
+  await started;
+  const closing = f.adapter.close();
+  assert.equal((await pending).status, 'cancelled');
+  await closing;
+  assert.equal(foregroundChild.signalCode, 'SIGTERM');
+  assert.equal(f.children[0].exitCode, 0);
+  assert.equal(f.children.length, 1);
+  assert.equal((await handle.done).status, 'stopped');
+});
+
+test('a forced foreground termination remains a rejected idempotent close', async t => {
+  const f = await setup(t, { process: fakeProcess(async () => ({ signal: 'SIGKILL' })) });
+  assert.equal((await f.adapter.progress()).status, 'failed');
+  const closing = f.adapter.close();
+  assert.equal(f.adapter.close(), closing);
+  await assert.rejects(closing, { code: 'foreground_cleanup_unconfirmed' });
+});
+
+test('maintenance drains many valid records without a lifetime output limit or retained history', async t => {
+  const f = await maintenanceFixture(t, { worker: `for(let i=0;i<12000;i++)process.stdout.write(process.argv[1]+'\\n');` });
+  const handle = await f.start();
+  // Count actual pipe bytes without retaining them; wait for all 12,001 records.
+  const child = f.children[0];
+  const expectedBytes = (Buffer.byteLength(JSON.stringify(checkpoint())) + 1) * 12001;
+  await new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => { child.stdout.off('data', check); reject(new Error('bounded pipe drain deadline')); }, 2000);
+    const check = () => {
+      if (child.receivedBytes >= expectedBytes) { clearTimeout(deadline); child.stdout.off('data', check); resolve(); }
+    };
+    child.stdout.on('data', check); check();
+  });
+  assert.ok(child.receivedBytes > 2 * 1024 ** 2);
+  assert.equal((await handle.status()).owned_process_running, true);
+  assert.equal((await handle.stop()).status, 'stopped');
+});
+
+test('malformed and oversized background records fail closed without exporting raw output', async t => {
+  for (const [body, code] of [[`process.stdout.write('PRIVATE-INVALID\\n');`, 'invalid_maintenance_report'],
+    [`process.stdout.write('x'.repeat(32769));`, 'report_too_large']]) {
+    const f = await maintenanceFixture(t, { worker: `setTimeout(()=>{${body}},20);`, failedClose: true });
+    const handle = await f.start();
+    const result = await handle.done;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, code);
+    assert.equal(result.local_process_joined, true);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-INVALID'));
+    assert.equal(f.children[0].exitCode, 0);
+  }
 });

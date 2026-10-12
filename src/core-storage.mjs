@@ -4,10 +4,13 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, normalize, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, sep } from 'node:path';
 
 const ARCHIVE_MAX = 64 * 1024 ** 3;
 const REPORT_MAX = 2 * 1024 ** 2;
+const MAINTENANCE_RECORD_MAX = 32768;
+const MAINTENANCE_STAGES = new Set(['enrolled', 'owner_locked', 'waiting_for_core', 'core_unavailable',
+  'working', 'paused', 'enrollment_expired', 'turn_completed', 'retry_pending', 'core_turn_revoked']);
 const CORE_CREATE_COPIES = 2; // Core policy contract, not an application-selectable tier.
 const COPY_HISTORY_MAX = 8;
 const REPAIR_FIELDS = ['placement_authorizations', 'retained_copy_records', 'pending_retirements',
@@ -88,6 +91,49 @@ async function controlSocket(path) {
   const file = await lstat(path);
   requireThat(file.isSocket() && (file.mode & 0o007) === 0
     && await realpath(path) === path, 'invalid_control_socket');
+}
+
+async function privateJSON(path, maximum) {
+  const handle = await privateFile(path, maximum);
+  try {
+    const before = await handle.stat({ bigint: true });
+    requireThat(before.size > 0n && before.size <= BigInt(maximum), 'private_file_required');
+    const bytes = Buffer.alloc(Number(before.size) + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    const entry = await lstat(path, { bigint: true });
+    requireThat(offset === Number(before.size) && ['dev', 'ino', 'size', 'mode', 'uid', 'nlink', 'mtimeNs', 'ctimeNs']
+      .every(key => before[key] === after[key] && after[key] === entry[key]), 'local_input_changed');
+    const raw = bytes.subarray(0, offset);
+    return { value: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)),
+      sha256: createHash('sha256').update(raw).digest('hex') };
+  } finally { await handle.close(); }
+}
+
+function maintenanceCheckpoint(raw) {
+  const valid = object(raw) && raw.version === 1 && raw.scope === 'owner-private-maintenance'
+    && MAINTENANCE_STAGES.has(raw.stage) && integer(raw.turns, 0, Number.MAX_SAFE_INTEGER)
+    && integer(raw.at, 1, Number.MAX_SAFE_INTEGER) && raw.core_coordinated === true
+    && raw.new_network_node === false && raw.automatic_grant_refresh === false && raw.private_key_exported === false;
+  requireThat(valid, 'invalid_maintenance_report');
+  // Detail may contain operation-specific data; never forward arbitrary core output.
+  return Object.freeze({ version: 1, scope: raw.scope, stage: raw.stage, turns: raw.turns, at: raw.at,
+    core_coordinated: true, new_network_node: false, automatic_grant_refresh: false, private_key_exported: false });
+}
+function maintenanceResult(status, code, checkpoint = null, running = false) {
+  return Object.freeze({ version: 1, operation: 'maintenance', status, code, checkpoint,
+    owned_process_running: running, local_process_joined: !running, remote_cleanup_confirmed: false,
+    automatic_grant_refresh: false, private_key_exported: false });
+}
+function maintenancePath(enrollment, state) {
+  absolute(enrollment);
+  requireThat(enrollment !== state && !enrollment.startsWith(`${state}${sep}`)
+    && !state.startsWith(`${enrollment}${sep}`), 'overlapping_maintenance_state');
 }
 function configuration(raw) {
   onlyKeys(raw, CONFIG_KEYS);
@@ -245,6 +291,11 @@ export class CoreStorage {
   #config;
   #spawn;
   #busy = false;
+  #operation = null;
+  #maintenance = null;
+  #closed = false;
+  #closing = null;
+  #cleanupFailure = null;
   constructor(config, spawnProcess, token) {
     requireThat(token === CONSTRUCT, 'use_core_storage_open');
     this.#config = config;
@@ -274,12 +325,299 @@ export class CoreStorage {
   renew(request, options) { return this.#run('renew', request, options); }
   delete(options) { return this.#run('delete', {}, options); }
 
-  async #run(operation, request = {}, { signal } = {}) {
+  async #exclusive(action, { signal } = {}) {
+    requireThat(!this.#closed, 'storage_closed');
+    requireThat(!this.#cleanupFailure, this.#cleanupFailure);
     requireThat(!this.#busy, 'operation_in_progress');
     requireThat(!signal || (typeof signal.addEventListener === 'function' && typeof signal.aborted === 'boolean'));
     requireThat(!signal?.aborted, 'cancelled');
-    requireThat(OPERATIONS.has(operation));
     this.#busy = true;
+    const controller = new AbortController();
+    let joined;
+    const done = new Promise(resolve => { joined = resolve; });
+    this.#operation = { controller, done };
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    try { return await action(controller.signal); }
+    catch (error) {
+      if (error instanceof StorageBridgeError) throw error;
+      throw new StorageBridgeError('local_input_unavailable');
+    }
+    finally {
+      signal?.removeEventListener('abort', cancel);
+      this.#busy = false;
+      this.#operation = null;
+      joined();
+    }
+  }
+
+  enrollMaintenance(request, options) {
+    return this.#exclusive(async signal => {
+      requireThat(!this.#maintenance, 'maintenance_in_progress');
+      onlyKeys(request, ['enrollment', 'fromProviderKey', 'providers', 'authorizationSeconds',
+        'lifetimeSeconds', 'renewBeforeSeconds', 'maximumChargedBytes', 'maximumTurnBytes']);
+      const c = this.#config;
+      maintenancePath(request.enrollment, c.stateDirectory);
+      requireThat(HASH.test(request.fromProviderKey) && Array.isArray(request.providers)
+        && integer(request.providers.length, 1, 8));
+      for (const name of ['authorizationSeconds', 'lifetimeSeconds', 'renewBeforeSeconds']) {
+        requireThat(integer(request[name], 1, 2678400));
+      }
+      requireThat(integer(request.maximumChargedBytes, 1, ARCHIVE_MAX * COPY_HISTORY_MAX)
+        && integer(request.maximumTurnBytes, 1, 134217728));
+      const args = ['--control-socket', c.controlSocket, 'storage', 'fragments', 'maintenance', 'enroll',
+        '--enrollment', request.enrollment, '--state', c.stateDirectory, '--from-provider-key', request.fromProviderKey,
+        '--authorization-seconds', String(request.authorizationSeconds), '--lifetime-seconds', String(request.lifetimeSeconds),
+        '--renew-before-seconds', String(request.renewBeforeSeconds), '--maximum-charged-bytes', String(request.maximumChargedBytes),
+        '--maximum-turn-bytes', String(request.maximumTurnBytes), '--identity', c.identity, '--passphrase-file', c.passphraseFile];
+      const retained = [];
+      try {
+        await executable(c.coreBinary);
+        await directory(c.stateDirectory);
+        await absent(request.enrollment);
+        const keys = new Set();
+        for (const provider of request.providers) {
+          onlyKeys(provider, ['key', 'grant']);
+          requireThat(HASH.test(provider.key) && provider.key !== request.fromProviderKey && !keys.has(provider.key));
+          keys.add(provider.key);
+          retained.push(await privateFile(provider.grant, 2048));
+          args.push('--provider-key', provider.key, '--grant', provider.grant);
+        }
+        retained.push(await privateFile(c.identity, 65536));
+        retained.push(await privateFile(c.passphraseFile, 1025));
+        requireThat(!signal.aborted, 'cancelled');
+        const execution = await this.#execute(args, signal, Date.now() + c.deadlineMs, () => {});
+        return this.#maintenanceOutcome(execution);
+      } finally { await Promise.all(retained.map(handle => handle.close())); }
+    }, options);
+  }
+
+  maintenanceStatus(request, options) {
+    return this.#exclusive(signal => {
+      onlyKeys(request, ['enrollment']);
+      return this.#readMaintenanceStatus(request.enrollment, signal);
+    }, options);
+  }
+
+  async #readMaintenanceStatus(enrollment, signal) {
+    const c = this.#config;
+    maintenancePath(enrollment, c.stateDirectory);
+    await executable(c.coreBinary);
+    await directory(enrollment);
+    requireThat(!signal?.aborted, 'cancelled');
+    const result = await this.#execute(['--control-socket', c.controlSocket, 'storage', 'fragments', 'maintenance',
+      'status', '--enrollment', enrollment], signal, Date.now() + c.deadlineMs, () => {});
+    const running = this.#maintenance?.request.enrollment === enrollment && !!this.#maintenance?.live;
+    return this.#maintenanceOutcome(result, running);
+  }
+
+  #maintenanceOutcome(execution, running = false) {
+    if (execution.stopped || execution.spawnError || execution.signal !== null || execution.code !== 0) {
+      return maintenanceResult('failed', execution.stopped ?? 'core_failed', null, running);
+    }
+    try {
+      requireThat(Buffer.byteLength(execution.output) <= MAINTENANCE_RECORD_MAX, 'invalid_maintenance_report');
+      return maintenanceResult('complete', 'ok', maintenanceCheckpoint(JSON.parse(execution.output)), running);
+    } catch { return maintenanceResult('failed', 'invalid_maintenance_report', null, running); }
+  }
+
+  startMaintenance(request, options = {}) {
+    return this.#exclusive(async signal => {
+      requireThat(!this.#maintenance, 'maintenance_in_progress');
+      onlyKeys(request, ['enrollment', 'maximumTurns']);
+      requireThat(!Object.hasOwn(request, 'maximumTurns') || integer(request.maximumTurns, 1, 4096));
+      const selected = Object.freeze({ ...request });
+      let resolveDone;
+      const done = new Promise(resolve => { resolveDone = resolve; });
+      const session = { request: selected, binding: null, desired: true, live: null, resolveDone, done,
+        signal: options.signal, abort: null, finished: false };
+      session.abort = () => { this.#endMaintenance(session, 'cancelled').catch(() => {}); };
+      this.#maintenance = session;
+      options.signal?.addEventListener('abort', session.abort, { once: true });
+      try {
+        requireThat(!signal.aborted && !options.signal?.aborted, 'cancelled');
+        session.binding = await this.#maintenanceBinding(selected.enrollment, signal);
+        await this.#launchMaintenance(session, signal);
+        return Object.freeze({ done, stop: () => this.#endMaintenance(session, 'stopped'),
+          status: () => this.maintenanceStatus({ enrollment: selected.enrollment }) });
+      } catch (error) {
+        await this.#endMaintenance(session, 'start_failed');
+        throw error;
+      }
+    }, options);
+  }
+
+  async #maintenanceBinding(enrollment, signal) {
+    maintenancePath(enrollment, this.#config.stateDirectory);
+    const before = await privateJSON(join(enrollment, 'enrollment.json'), MAINTENANCE_RECORD_MAX);
+    const status = await this.#readMaintenanceStatus(enrollment, signal);
+    requireThat(status.status === 'complete', status.code);
+    const after = await privateJSON(join(enrollment, 'enrollment.json'), MAINTENANCE_RECORD_MAX);
+    requireThat(before.sha256 === after.sha256, 'enrollment_changed');
+    const authority = after.value?.enrollment;
+    requireThat(object(authority) && authority.version === 1 && authority.archive === this.#config.stateDirectory
+      && integer(authority.created, 1, Number.MAX_SAFE_INTEGER) && integer(authority.expires, authority.created + 1, Number.MAX_SAFE_INTEGER)
+      && authority.expires - authority.created <= 2678400, 'invalid_enrollment');
+    requireThat(authority.created <= Math.floor(Date.now() / 1000) && authority.expires > Math.floor(Date.now() / 1000), 'enrollment_expired');
+    return Object.freeze({ sha256: after.sha256, expires: authority.expires, turns: status.checkpoint.turns });
+  }
+
+  async #launchMaintenance(session, signal) {
+    const c = this.#config;
+    const binding = await this.#maintenanceBinding(session.request.enrollment, signal);
+    requireThat(binding.sha256 === session.binding.sha256, 'enrollment_changed');
+    requireThat(binding.turns >= session.binding.turns, 'maintenance_cursor_regressed');
+    const remaining = session.request.maximumTurns === undefined ? undefined
+      : session.request.maximumTurns - (binding.turns - session.binding.turns);
+    if (remaining !== undefined && remaining <= 0) {
+      this.#finishMaintenance(session, maintenanceResult('stopped', 'turn_limit'));
+      return;
+    }
+    const retained = [];
+    try {
+      await executable(c.coreBinary);
+      await directory(c.stateDirectory);
+      retained.push(await privateFile(c.identity, 65536));
+      retained.push(await privateFile(c.passphraseFile, 1025));
+      requireThat(session.desired && !this.#closed && !signal?.aborted && !session.signal?.aborted, 'cancelled');
+      const args = ['--control-socket', c.controlSocket, 'storage', 'fragments', 'maintenance', 'serve',
+        '--enrollment', session.request.enrollment, '--identity', c.identity, '--passphrase-file', c.passphraseFile];
+      if (remaining !== undefined) args.push('--maximum-turns', String(remaining));
+      const child = this.#spawn(c.coreBinary, args, { cwd: dirname(c.stateDirectory), shell: false, detached: true,
+        env: { LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }, stdio: ['ignore', 'pipe', 'ignore'] });
+      let resolveDone, pending = Buffer.alloc(0), stopped = null, killTimer, checkpoint = null, spawned = false;
+      const done = new Promise(resolve => { resolveDone = resolve; });
+      const kill = name => {
+        if (session.live?.child === child && Number.isSafeInteger(child.pid) && child.pid > 1) {
+          try { process.kill(-child.pid, name); } catch { /* Completion still requires close. */ }
+        }
+      };
+      const stop = reason => {
+        if (stopped || session.live?.child !== child) return;
+        stopped = reason; pending = Buffer.alloc(0);
+        kill('SIGTERM');
+        killTimer = setTimeout(() => kill('SIGKILL'), 5000);
+      };
+      session.live = { child, done, stop };
+      let expiryTimer;
+      const expire = () => {
+        const delay = session.binding.expires * 1000 - Date.now();
+        if (delay <= 0) stop('enrollment_expired');
+        else expiryTimer = setTimeout(expire, Math.min(delay, 2147483647));
+      };
+      expire();
+      child.stdout.on('data', chunk => {
+        if (stopped) return; // The pipe remains drained after a stop request.
+        let offset = 0;
+        while (offset < chunk.length) {
+          const newline = chunk.indexOf(10, offset);
+          const end = newline === -1 ? chunk.length : newline;
+          if (pending.length + end - offset > MAINTENANCE_RECORD_MAX) { stop('report_too_large'); return; }
+          pending = Buffer.concat([pending, chunk.subarray(offset, end)]);
+          offset = newline === -1 ? chunk.length : newline + 1;
+          if (newline !== -1) {
+            try { checkpoint = maintenanceCheckpoint(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(pending))); }
+            catch { stop('invalid_maintenance_report'); return; }
+            pending = Buffer.alloc(0);
+          }
+        }
+      });
+      child.on('error', () => { stopped ??= 'core_spawn_failed'; });
+      child.on('close', (code, termination) => {
+        clearTimeout(expiryTimer); clearTimeout(killTimer);
+        if (session.live?.child === child) session.live = null;
+        const clean = spawned && code === 0 && termination === null && pending.length === 0
+          && (!stopped || ['foreground_pause', 'stopped', 'cancelled', 'closed', 'enrollment_expired'].includes(stopped));
+        const result = maintenanceResult(clean ? 'stopped' : 'failed', clean ? stopped ?? checkpoint?.stage ?? 'core_exited' : stopped ?? 'core_failed', checkpoint);
+        resolveDone(result);
+        if (stopped !== 'foreground_pause') this.#finishMaintenance(session, result);
+      });
+      await new Promise((resolve, reject) => {
+        child.once('spawn', () => { spawned = true; resolve(); });
+        child.once('error', () => reject(new StorageBridgeError('core_spawn_failed')));
+      });
+      if (!session.desired || this.#closed || signal?.aborted || session.signal?.aborted) stop('cancelled');
+    } finally { await Promise.all(retained.map(handle => handle.close())); }
+  }
+
+  #finishMaintenance(session, result) {
+    if (session.finished) return;
+    if (result.status === 'failed') this.#cleanupFailure ??= 'maintenance_cleanup_unconfirmed';
+    session.finished = true; session.desired = false;
+    session.signal?.removeEventListener('abort', session.abort);
+    if (this.#maintenance === session) this.#maintenance = null;
+    session.resolveDone(result);
+  }
+
+  async #endMaintenance(session, reason) {
+    session.desired = false;
+    const live = session.live;
+    if (live) {
+      live.stop(reason);
+      const result = await live.done;
+      this.#finishMaintenance(session, result);
+    } else this.#finishMaintenance(session, maintenanceResult('stopped', reason));
+    return session.done;
+  }
+
+  stopMaintenance() {
+    return this.#maintenance ? this.#endMaintenance(this.#maintenance, 'stopped')
+      : Promise.resolve(maintenanceResult(this.#cleanupFailure ? 'failed' : 'stopped', this.#cleanupFailure ?? 'not_running'));
+  }
+
+  close() {
+    if (!this.#closing) {
+      this.#closed = true;
+      this.#operation?.controller.abort();
+      const operation = this.#operation?.done;
+      const maintenance = this.stopMaintenance();
+      this.#closing = (async () => {
+        await operation;
+        const result = await maintenance;
+        requireThat(!this.#cleanupFailure, this.#cleanupFailure);
+        return result;
+      })();
+    }
+    return this.#closing;
+  }
+
+  #run(operation, request = {}, options) {
+    return this.#exclusive(async signal => {
+      const session = this.#maintenance;
+      if (session?.live) {
+        const live = session.live;
+        live.stop('foreground_pause');
+        const stopped = await live.done;
+        if (stopped.status === 'failed') {
+          this.#finishMaintenance(session, stopped);
+          throw new StorageBridgeError('maintenance_cleanup_unconfirmed');
+        }
+      }
+      let result;
+      try {
+        requireThat(!signal.aborted && !this.#closed, 'cancelled');
+        result = await this.#foreground(operation, request, { signal });
+      } catch (error) {
+        if (session) this.#finishMaintenance(session, maintenanceResult('stopped', 'foreground_failed'));
+        throw error;
+      }
+      if (session && !session.finished) {
+        if (session.desired && !this.#closed && !signal.aborted && !session.signal?.aborted
+          && result.status === 'complete' && result.local_process_joined && operation !== 'delete') {
+          try { await this.#launchMaintenance(session, signal); }
+          catch {
+            if (session.live) await this.#endMaintenance(session, 'resume_unavailable');
+            else this.#finishMaintenance(session, maintenanceResult('stopped', 'resume_unavailable'));
+          }
+        } else this.#finishMaintenance(session, maintenanceResult('stopped', 'foreground_not_resumed'));
+      }
+      return result;
+    }, options);
+  }
+
+  async #foreground(operation, request = {}, { signal } = {}) {
+    requireThat(OPERATIONS.has(operation));
     const retained = [];
     let launched = false;
     try {
@@ -358,7 +696,6 @@ export class CoreStorage {
       throw new StorageBridgeError(launched ? 'local_verification_failed' : 'local_input_unavailable');
     } finally {
       await Promise.all(retained.map(handle => handle.close()));
-      this.#busy = false;
     }
   }
 
@@ -404,6 +741,7 @@ export class CoreStorage {
       child.on('error', () => { spawnError = true; });
       child.on('close', (code, terminationSignal) => {
         closed = true;
+        if (terminationSignal === 'SIGKILL') this.#cleanupFailure ??= 'foreground_cleanup_unconfirmed';
         clearTimeout(timeout);
         clearTimeout(killTimer);
         signal?.removeEventListener('abort', cancel);

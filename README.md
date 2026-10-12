@@ -61,6 +61,11 @@ Three connected development components are available:
    CLI uploads only hash-checked ciphertext and restores into a new private bundle;
    supplying the owner's key and decrypting remain separate operations.
 
+The bridge and CLI now also expose [finite owner maintenance](docs/STORAGE_BRIDGE.md#finite-owner-maintenance):
+explicit enrollment, supervised core maintenance, and foreground pause/join/resume
+through one adapter instance. Process/contract checks are available; a combined
+real-peer maintenance proof and installed background service are still pending.
+
 Do not upload the entire snapshot bundle: only `snapshot.pgp` belongs on storage peers,
 never `recovery.key`. Keep originals until independently verified recovery and an explicit
 owner decision to remove them.
