@@ -356,13 +356,17 @@ export class CoreStorage {
     return this.#exclusive(async signal => {
       requireThat(!this.#maintenance, 'maintenance_in_progress');
       onlyKeys(request, ['enrollment', 'fromProviderKey', 'providers', 'authorizationSeconds',
-        'lifetimeSeconds', 'renewBeforeSeconds', 'maximumChargedBytes', 'maximumTurnBytes']);
+        'authorizationExpiresAt', 'lifetimeSeconds', 'renewBeforeSeconds', 'maximumChargedBytes', 'maximumTurnBytes']);
       const c = this.#config;
       maintenancePath(request.enrollment, c.stateDirectory);
       requireThat(HASH.test(request.fromProviderKey) && Array.isArray(request.providers)
         && integer(request.providers.length, 1, 8));
       for (const name of ['authorizationSeconds', 'lifetimeSeconds', 'renewBeforeSeconds']) {
         requireThat(integer(request[name], 1, 2678400));
+      }
+      const hasAbsoluteExpiry = Object.hasOwn(request, 'authorizationExpiresAt');
+      if (hasAbsoluteExpiry) {
+        requireThat(integer(request.authorizationExpiresAt, 1, Number.MAX_SAFE_INTEGER));
       }
       requireThat(integer(request.maximumChargedBytes, 1, ARCHIVE_MAX * COPY_HISTORY_MAX)
         && integer(request.maximumTurnBytes, 1, 134217728));
@@ -371,6 +375,9 @@ export class CoreStorage {
         '--authorization-seconds', String(request.authorizationSeconds), '--lifetime-seconds', String(request.lifetimeSeconds),
         '--renew-before-seconds', String(request.renewBeforeSeconds), '--maximum-charged-bytes', String(request.maximumChargedBytes),
         '--maximum-turn-bytes', String(request.maximumTurnBytes), '--identity', c.identity, '--passphrase-file', c.passphraseFile];
+      // Preserve the owner's exact absolute deadline. The core must enforce it
+      // at signing; converting it to a new relative duration could extend it.
+      if (hasAbsoluteExpiry) args.push('--authorization-expires-at', String(request.authorizationExpiresAt));
       const retained = [];
       try {
         await executable(c.coreBinary);

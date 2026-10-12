@@ -542,6 +542,7 @@ test('finite maintenance enrollment forwards only explicit owner scope; no netwo
     assert.equal(args[args.indexOf(flag) + 1], expected);
   }
   assert.equal(args.filter(value => value === '--provider-key').length, 2);
+  assert.ok(!args.includes('--authorization-expires-at'));
   assert.ok(!JSON.stringify(result).includes(f.root));
   assert.ok(!JSON.stringify(result).includes('DO-NOT-EXPORT'));
   assert.ok(!args.includes('recovery.key'));
@@ -550,6 +551,38 @@ test('finite maintenance enrollment forwards only explicit owner scope; no netwo
     { enrollment: join(f.config.stateDirectory, 'nested') }, { automaticRenewal: true }]) {
     await assert.rejects(f.adapter.enrollMaintenance({ ...request, ...changes }));
   }
+});
+
+test('maintenance forwards the exact optional absolute expiry without replacing its relative limit', async t => {
+  const f = await maintenanceFixture(t);
+  await rm(f.enrollment, { recursive: true });
+  // A historical deadline deliberately proves that this bridge does not turn
+  // an elapsed service window into a fresh one. Actual expiry rejection belongs
+  // to the core signing boundary, not this synthetic CLI-argument fixture.
+  const authorizationExpiresAt = 1700000000;
+  const request = { enrollment: f.enrollment, fromProviderKey: KEYS[0], providers: f.config.providers.slice(1),
+    authorizationSeconds: 600, authorizationExpiresAt, lifetimeSeconds: 300, renewBeforeSeconds: 60,
+    maximumChargedBytes: 4096, maximumTurnBytes: 1048576 };
+  await f.adapter.enrollMaintenance(request);
+  assert.equal(f.calls.length, 1);
+  const { args } = f.calls[0];
+  assert.equal(args.filter(value => value === '--authorization-expires-at').length, 1);
+  assert.equal(args[args.indexOf('--authorization-expires-at') + 1], String(authorizationExpiresAt));
+  assert.equal(args[args.indexOf('--authorization-seconds') + 1], '600');
+  assert.equal(request.authorizationExpiresAt, authorizationExpiresAt);
+});
+
+test('invalid absolute maintenance expiries are rejected before any core process starts', async t => {
+  const f = await maintenanceFixture(t);
+  await rm(f.enrollment, { recursive: true });
+  const request = { enrollment: f.enrollment, fromProviderKey: KEYS[0], providers: f.config.providers.slice(1),
+    authorizationSeconds: 600, lifetimeSeconds: 300, renewBeforeSeconds: 60,
+    maximumChargedBytes: 4096, maximumTurnBytes: 1048576 };
+  for (const authorizationExpiresAt of [undefined, null, false, true, '1700000000', 0, -1, 1.5,
+    NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(f.adapter.enrollMaintenance({ ...request, authorizationExpiresAt }), { code: 'invalid_request' });
+  }
+  assert.equal(f.calls.length, 0);
 });
 
 test('maintenance owns a real child while status stays distinct from stale checkpoint; stop joins without deleting state', async t => {
