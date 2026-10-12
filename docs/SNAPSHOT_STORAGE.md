@@ -4,7 +4,8 @@
 [snapshot producer](SNAPSHOT.md) to the real
 [`CoreStorage` adapter](STORAGE_BRIDGE.md). It is an explicit Linux / Node 24 CLI,
 not a new daemon, peer scheduler or application-side storage ledger. No package
-installation, provider discovery or background participation is performed.
+installation or provider discovery is performed. Background maintenance starts
+only through the explicit commands below, using finite owner authorization.
 
 ## Prepare once
 
@@ -64,6 +65,37 @@ availability/cleanup limitations remain unchanged. Cancellation propagates to th
 bridge; it does not imply remote erasure. Preflight hashing has a bounded budget
 from `deadlineMs`; the subsequent core operation has its own bridge budget.
 
+## Maintain an explicitly enrolled archive
+
+The developing core maintenance interface can supervise renewal and repair while
+an owner process is running. Prepare a private `0600` policy JSON using the
+[`enrollMaintenance` request fields](STORAGE_BRIDGE.md#finite-owner-maintenance),
+with actual owner-selected grants and bounded authority; the CLI does not invent
+them. Keep this policy and enrollment outside the encrypted snapshot bundle.
+
+```sh
+node scripts/snapshot-storage.mjs maintenance-enroll \
+  --config /owner/private/storage.json --policy /owner/private/maintenance-policy.json
+
+node scripts/snapshot-storage.mjs maintenance-status \
+  --config /owner/private/storage.json --enrollment /owner/private/maintenance
+
+node scripts/snapshot-storage.mjs maintenance-serve \
+  --config /owner/private/storage.json --enrollment /owner/private/maintenance
+```
+
+`maintenance-serve` stays attached until stopped, its authorization expires or the
+core finishes/fails. `--maximum-turns N` optionally bounds this invocation. Stop
+and join this command before running a separate snapshot command against the same
+archive: separate processes do not share the adapter's automatic foreground
+pause/resume. An application using one `CoreStorage` instance gets that coordination.
+
+Restart with the **same enrollment and archive**, not another enrollment as a retry.
+No automatic grant refresh, replacement authority or installed background service
+is created. Checkpoint status alone does not establish liveness or availability.
+These new bindings have process/contract tests; their real peer-backed application
+maintenance proof is still required.
+
 ## Retrieve first; supply the key and decrypt separately
 
 ```sh
@@ -109,8 +141,9 @@ remain conservatively charged. No global secure-erasure promise follows.
 
 The CLI emits the adapter's closed JSON result plus `snapshot_operation`,
 `snapshot_ciphertext_checked`, `recovery_bundle_ready`, `snapshot_decrypted: false`
-and `immich_restore_proven: false`. Exit status is zero only for a complete
-operation. It does not print local paths, keys, raw subprocess logs or receipt
+and `immich_restore_proven: false`. Exit status is zero for a complete
+operation, or a cleanly stopped `maintenance-serve` session. A stopped maintenance
+session is not proof of complete remote repair. It does not print local paths, keys, raw subprocess logs or receipt
 hashes. Validation failures use closed codes. `--help` performs no core operation.
 
 ```sh

@@ -16,6 +16,9 @@ const FLAGS = {
   create: ['config', 'bundle'], deposit: ['config', 'bundle'],
   status: ['config'], progress: ['config'], delete: ['config'],
   restore: ['config', 'receipt', 'output'], renew: ['config', 'lifetime-seconds'],
+  'maintenance-enroll': ['config', 'policy'],
+  'maintenance-status': ['config', 'enrollment'],
+  'maintenance-serve': ['config', 'enrollment'],
 };
 
 export class SnapshotStorageError extends Error {
@@ -134,16 +137,21 @@ async function writeReceipt(bundle, expected) {
 export function parseArguments(argv) {
   try {
     const { values, positionals, tokens } = parseArgs({ args: argv, strict: true, allowPositionals: true, tokens: true,
-      options: Object.fromEntries(['config', 'bundle', 'receipt', 'output', 'lifetime-seconds']
+      options: Object.fromEntries(['config', 'bundle', 'receipt', 'output', 'lifetime-seconds', 'policy', 'enrollment', 'maximum-turns']
         .map(key => [key, { type: 'string' }])) });
     const operation = positionals[0];
     check(positionals.length === 1 && Object.hasOwn(FLAGS, operation), 'invalid_arguments');
     const required = FLAGS[operation];
-    check(Object.keys(values).length === required.length && required.every(key => values[key]), 'invalid_arguments');
-    check(tokens.filter(token => token.kind === 'option').length === required.length, 'invalid_arguments');
+    const allowed = operation === 'maintenance-serve' ? [...required, 'maximum-turns'] : required;
+    check(required.every(key => values[key]) && Object.keys(values).every(key => allowed.includes(key)), 'invalid_arguments');
+    check(tokens.filter(token => token.kind === 'option').length === Object.keys(values).length, 'invalid_arguments');
     if (operation === 'renew') {
       check(/^[1-9][0-9]*$/.test(values['lifetime-seconds'])
         && integer(Number(values['lifetime-seconds']), 1, 2678400), 'invalid_arguments');
+    }
+    if (values['maximum-turns'] !== undefined) {
+      check(/^[1-9][0-9]*$/.test(values['maximum-turns'])
+        && integer(Number(values['maximum-turns']), 1, 4096), 'invalid_arguments');
     }
     return Object.freeze({ operation, ...values });
   } catch { throw new SnapshotStorageError('invalid_arguments'); }
@@ -171,6 +179,23 @@ export async function runSnapshotStorage(options, { signal, storageFactory = val
     } else if (operation === 'restore') expected = await receipt(options.receipt);
     interrupted(signal, deadline);
     const storage = await storageFactory(configPath);
+    if (operation.startsWith('maintenance-')) {
+      try {
+        let result;
+        if (operation === 'maintenance-enroll') {
+          result = await storage.enrollMaintenance(await readJson(options.policy, 32768), { signal });
+        } else if (operation === 'maintenance-status') {
+          result = await storage.maintenanceStatus({ enrollment: options.enrollment }, { signal });
+        } else {
+          const session = await storage.startMaintenance({ enrollment: options.enrollment,
+            ...(options['maximum-turns'] !== undefined ? { maximumTurns: Number(options['maximum-turns']) } : {}) }, { signal });
+          result = await session.done;
+        }
+        return Object.freeze({ ...result, snapshot_operation: operation,
+          snapshot_ciphertext_checked: false, recovery_bundle_ready: false,
+          snapshot_decrypted: false, immich_restore_proven: false });
+      } finally { await storage.close(); }
+    }
     let result;
     if (operation === 'create') {
       result = await storage.create({ input, sha256: expected.cipher_sha256, alreadyEncrypted: true }, { signal });
@@ -203,13 +228,18 @@ export async function runSnapshotStorage(options, { signal, storageFactory = val
   }
 }
 
-const HELP = `Snapshot storage bridge (Linux / Node 24; no automatic create/retry/decrypt)
+const HELP = `Snapshot storage bridge (Linux / Node 24; no implicit enrollment or decrypt)
   create|deposit --config /private/storage.json --bundle /private/snapshot
   status|progress|delete --config /private/storage.json
   renew --config /private/storage.json --lifetime-seconds 604800
   restore --config /private/storage.json --receipt /private/snapshot/receipt.json --output /private/new-bundle
+  maintenance-enroll --config /private/storage.json --policy /private/finite-maintenance.json
+  maintenance-status --config /private/storage.json --enrollment /private/maintenance
+  maintenance-serve --config /private/storage.json --enrollment /private/maintenance [--maximum-turns 8]
 Only snapshot.pgp is uploaded. Keep receipt, core journal and recovery.key independently private.
 Restore creates ciphertext + receipt only; supply the recovery key and decrypt separately.
+Maintenance serves an existing finite authorization until stopped or expired; the core alone schedules/reconnects.
+SIGINT/SIGTERM stops and joins this owner session; it preserves enrollment and all retained journals.
 `;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -222,7 +252,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try {
       const result = await runSnapshotStorage(parseArguments(process.argv.slice(2)), { signal: controller.signal });
       process.stdout.write(`${JSON.stringify(result)}\n`);
-      process.exitCode = result.status === 'complete' ? 0 : 1;
+      process.exitCode = result.status === 'complete' || (result.snapshot_operation === 'maintenance-serve' && result.status === 'stopped') ? 0 : 1;
     } catch (error) {
       process.stderr.write(`${JSON.stringify({ version: 1, status: 'failed', code: error.code })}\n`);
       process.exitCode = 1;
