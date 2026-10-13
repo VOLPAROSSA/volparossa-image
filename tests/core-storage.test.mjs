@@ -194,6 +194,97 @@ function diagnostic(overrides = {}) {
     stage: 'wire_receipt', category: 'io', agent_code: null }], omitted_failures: 0, ...overrides };
 }
 
+function diagnosticV2(detail = null, changes = {}) {
+  return { ...diagnostic(), version: 2, failures: [{ ...diagnostic().failures[0],
+    operation: 'reserve', stage: 'agent_ready', category: 'agent_rejected',
+    agent_code: 'CONTENT_UNAVAILABLE', agent_detail: detail, ...changes }] };
+}
+
+test('v2 pre-READY details retain exact closed observations without changing charges or retry', async t => {
+  let current = diagnosticV2();
+  const raw = coreReport('deposit', 'uncertain', false);
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...raw, deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const baseline = await fixture.adapter.deposit(request);
+  assert.equal(baseline.storage.deposit_diagnostics.failures[0].agent_detail, null);
+  const stages = ['route_connect', 'control_selection', 'provider_lookup', 'provider_cardinality',
+    'offer_validity', 'stream_open', 'tls_handshake', 'challenge'];
+  const cases = stages.flatMap(stage => ['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY']
+    .map(agent_code => ({ stage, deadline_scope: 'none', agent_code })));
+  for (const stage of ['unobserved', ...stages]) cases.push({ stage, deadline_scope: 'operation', agent_code: 'CONTENT_UNAVAILABLE' });
+  for (const stage of ['stream_open', 'tls_handshake', 'challenge']) cases.push({ stage, deadline_scope: 'exchange', agent_code: 'CONTENT_UNAVAILABLE' });
+  for (const { agent_code, ...detail } of cases) {
+    current = diagnosticV2(detail, { agent_code });
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(result.status, 'incomplete');
+    assert.deepEqual(result.storage.deposit_diagnostics, current);
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    const { deposit_diagnostics: ignored, ...oldAccounting } = baseline.storage;
+    assert.deepEqual(accounting, oldAccounting);
+    assert.ok(Object.isFrozen(deposit_diagnostics.failures[0].agent_detail));
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.deepEqual(fixture.calls.at(-1).args, fixture.calls[0].args);
+    for (const secret of [fixture.root, ...KEYS, 'synthetic-private-fixture-only']) assert.ok(!JSON.stringify(result).includes(secret));
+  }
+  current = diagnosticV2(null, { stage: 'wire_receipt', category: 'io', agent_code: null });
+  assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, current);
+  current = diagnostic();
+  const historical = (await fixture.adapter.deposit(request)).storage.deposit_diagnostics;
+  assert.deepEqual(historical, current);
+  assert.equal(Object.hasOwn(historical.failures[0], 'agent_detail'), false);
+});
+
+test('v2 rejects contradictory, missing, non-initial and leaking agent detail', async t => {
+  let current;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const good = { stage: 'tls_handshake', deadline_scope: 'none' };
+  const invalid = [diagnosticV2('PRIVATE-CANARY'), diagnosticV2([]), diagnosticV2({}),
+    diagnosticV2({ ...good, address: 'PRIVATE-CANARY' }), diagnosticV2({ stage: 'tls_handshake' }),
+    diagnosticV2({ ...good, stage: 'PRIVATE-CANARY' }), diagnosticV2({ ...good, deadline_scope: 'PRIVATE-CANARY' }),
+    diagnosticV2({ stage: 'unobserved', deadline_scope: 'none' }),
+    diagnosticV2({ stage: 'unobserved', deadline_scope: 'exchange' }),
+    diagnosticV2({ stage: 'provider_lookup', deadline_scope: 'exchange' }),
+    diagnosticV2(good, { stage: 'agent_terminal' }), diagnosticV2(good, { stage: 'wire_receipt' }),
+    diagnosticV2(good, { category: 'io', agent_code: null }), diagnosticV2(good, { agent_code: 'unknown' }),
+    diagnosticV2(good, { agent_code: 'CONTENT_NAME_INVALID' }), diagnosticV2(good, { agent_code: null })];
+  for (const agent_code of ['CONTENT_INVALID', 'CONTENT_BUSY', 'CONTENT_POLICY']) {
+    for (const deadline_scope of ['operation', 'exchange']) invalid.push(diagnosticV2({ ...good, deadline_scope }, { agent_code }));
+  }
+  const missing = diagnosticV2(); delete missing.failures[0].agent_detail; invalid.push(missing);
+  const oldWithNewField = diagnosticV2(); oldWithNewField.version = 1; invalid.push(oldWithNewField);
+  const future = diagnosticV2(); future.version = 3; invalid.push(future);
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report');
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-CANARY'));
+  }
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('v2 diagnostics preserve completion and retained-copy omission bounds', async t => {
+  let raw = repairedReport('deposit', 'pending', 6);
+  raw.deposit_diagnostics = { version: 2, failures: Array.from({ length: 8 }, (_, copy_index) => ({
+    ...diagnosticV2().failures[0], copy_index,
+  })), omitted_failures: 4 };
+  const fixture = await setup(t, { process: fakeProcess(async () => ({ raw, code: raw.operation_complete ? 0 : 1 })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, raw.deposit_diagnostics);
+  raw.deposit_diagnostics.omitted_failures = 5;
+  assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+  raw = { ...coreReport('deposit'), deposit_diagnostics: { version: 2, failures: [], omitted_failures: 0 } };
+  assert.equal((await fixture.adapter.deposit(request)).status, 'complete');
+  raw.deposit_diagnostics = diagnosticV2();
+  assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+});
+
 test('optional deposit diagnostics are closed, frozen and do not alter retained accounting or status', async t => {
   const raw = coreReport('deposit', 'uncertain', false);
   let include = false;

@@ -22,6 +22,9 @@ const DEPOSIT_STAGES = new Set(['journal_open', 'authorization', 'agent_ready', 
   'wire_receipt', 'agent_terminal', 'accounting', 'local_input', 'receipt_validation', 'journal_save', 'deadline', 'unknown']);
 const DEPOSIT_CATEGORIES = new Set(['io', 'timeout', 'protocol', 'agent_rejected', 'invalid', 'busy', 'store', 'unknown']);
 const DEPOSIT_AGENT_CODES = new Set(['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY', 'unknown']);
+const DEPOSIT_AGENT_STAGES = new Set(['unobserved', 'route_connect', 'control_selection', 'provider_lookup',
+  'provider_cardinality', 'offer_validity', 'stream_open', 'tls_handshake', 'challenge']);
+const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challenge']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
@@ -164,7 +167,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
-  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && raw.version === 1
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2].includes(raw.version)
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -172,7 +175,9 @@ function depositDiagnostics(raw, fragments, complete) {
     && (!complete || (raw.failures.length === 0 && raw.omitted_failures === 0)));
   const seen = new Set();
   const failures = raw.failures.map(failure => {
-    check(exactKeys(failure, ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code']));
+    const keys = ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code'];
+    if (raw.version === 2) keys.push('agent_detail');
+    check(exactKeys(failure, keys));
     const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
     // This bridge consumes fragment reports, never the replica-only null index.
     check(integer(fragment_index, 0, fragments.length - 1)
@@ -182,10 +187,25 @@ function depositDiagnostics(raw, fragments, complete) {
     const copy = `${fragment_index}:${copy_index}`;
     check(!seen.has(copy));
     seen.add(copy);
-    return Object.freeze({ fragment_index, copy_index, operation, stage, category, agent_code });
+    const closed = { fragment_index, copy_index, operation, stage, category, agent_code };
+    if (raw.version === 2) {
+      const detail = failure.agent_detail;
+      if (detail !== null) {
+        check(exactKeys(detail, ['stage', 'deadline_scope'])
+          && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
+          && DEPOSIT_AGENT_STAGES.has(detail.stage)
+          && ['none', 'operation', 'exchange'].includes(detail.deadline_scope)
+          && (detail.stage !== 'unobserved' || detail.deadline_scope === 'operation')
+          && (detail.deadline_scope !== 'exchange' || DEPOSIT_EXCHANGE_STAGES.has(detail.stage))
+          && (detail.deadline_scope === 'none' || agent_code === 'CONTENT_UNAVAILABLE'));
+      }
+      closed.agent_detail = detail === null ? null
+        : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope });
+    }
+    return Object.freeze(closed);
   });
   // Diagnostic evidence does not alter completion, accounting, retry or cleanup.
-  return Object.freeze({ version: 1, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
+  return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
 }
 
 function summary(raw, operation) {
