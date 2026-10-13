@@ -189,6 +189,120 @@ test('incomplete deposit keeps exact state/charged bytes; retry uses no new plac
   assert.equal((await readFile(fixture.input)).equals(CONTENT), true);
 });
 
+function diagnostic(overrides = {}) {
+  return { version: 1, failures: [{ fragment_index: 0, copy_index: 1, operation: 'append',
+    stage: 'wire_receipt', category: 'io', agent_code: null }], omitted_failures: 0, ...overrides };
+}
+
+test('optional deposit diagnostics are closed, frozen and do not alter retained accounting or status', async t => {
+  const raw = coreReport('deposit', 'uncertain', false);
+  let include = false;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: include ? { ...raw, deposit_diagnostics: diagnostic() } : raw, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const old = await fixture.adapter.deposit(request);
+  assert.equal(Object.hasOwn(old.storage, 'deposit_diagnostics'), false);
+  include = true;
+  const result = await fixture.adapter.deposit(request);
+  assert.deepEqual(result.storage.deposit_diagnostics, diagnostic());
+  const { deposit_diagnostics: closed, ...accounting } = result.storage;
+  assert.deepEqual(accounting, old.storage);
+  assert.deepEqual({ ...result, storage: old.storage }, old);
+  assert.ok(Object.isFrozen(closed) && Object.isFrozen(closed.failures) && Object.isFrozen(closed.failures[0]));
+  for (const secret of [fixture.root, ...KEYS, 'synthetic-private-fixture-only']) {
+    assert.ok(!JSON.stringify(result).includes(secret));
+  }
+  assert.deepEqual(fixture.calls[0].args, fixture.calls[1].args);
+  assert.equal(result.local_process_joined, true);
+  assert.equal(result.remote_cleanup_confirmed, false);
+});
+
+test('all closed diagnostic enums and actual agent rejection codes can be forwarded, including unknown', async t => {
+  let current = diagnostic();
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const choices = {
+    operation: ['prepare', 'reserve', 'progress', 'append', 'finalize', 'renew', 'read_range', 'delete'],
+    stage: ['journal_open', 'authorization', 'agent_ready', 'challenge', 'signed_request', 'wire_receipt',
+      'agent_terminal', 'accounting', 'local_input', 'receipt_validation', 'journal_save', 'deadline', 'unknown'],
+    category: ['io', 'timeout', 'protocol', 'agent_rejected', 'invalid', 'busy', 'store', 'unknown'],
+  };
+  for (const [key, values] of Object.entries(choices)) for (const value of values) {
+    current = diagnostic(); current.failures[0][key] = value;
+    if (value === 'agent_rejected') current.failures[0].agent_code = 'unknown';
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.status, 'incomplete', `${key}:${value}`);
+    assert.deepEqual(result.storage.deposit_diagnostics, current);
+  }
+  for (const code of ['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY', 'unknown']) {
+    current = diagnostic(); Object.assign(current.failures[0], { category: 'agent_rejected', agent_code: code });
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.storage.deposit_diagnostics.failures[0].agent_code, code);
+  }
+});
+
+test('diagnostic bounds use the already verified retained fragment/copy geometry including v2 history', async t => {
+  const raw = repairedReport('deposit', 'pending', 6);
+  raw.deposit_diagnostics = diagnostic({ failures: Array.from({ length: 8 }, (_, copy_index) => ({
+    ...diagnostic().failures[0], copy_index,
+  })), omitted_failures: 2048 });
+  const fixture = await setup(t, { process: fakeProcess(async () => ({ raw, code: 1 })) });
+  const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.storage.report_version, 2);
+  assert.equal(result.storage.retained_copy_records, 12);
+  assert.deepEqual(result.storage.deposit_diagnostics, raw.deposit_diagnostics);
+});
+
+test('malformed or leaking diagnostics fail closed without forwarding raw strings or changing the journal', async t => {
+  let current;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const malformed = [null, [], {}, diagnostic({ version: 2 }), diagnostic({ omitted_failures: 2049 }),
+    diagnostic({ omitted_failures: -1 }), diagnostic({ omitted_failures: '1' }), diagnostic({ failures: null }),
+    diagnostic({ failures: Array(9).fill(diagnostic().failures[0]) }), diagnostic({ raw: 'PRIVATE-CANARY' })];
+  for (const [key, value] of [['fragment_index', null], ['fragment_index', -1], ['fragment_index', 3],
+    ['fragment_index', '0'], ['fragment_index', 1.5], ['copy_index', -1], ['copy_index', 2], ['copy_index', null],
+    ['copy_index', '0'], ['operation', 'PRIVATE-CANARY'], ['stage', 'PRIVATE-CANARY'],
+    ['category', 'PRIVATE-CANARY'], ['agent_code', 'CONTENT_BUSY'], ['agent_code', 'unknown']]) {
+    const bad = diagnostic(); bad.failures[0][key] = value; malformed.push(bad);
+  }
+  const missing = diagnostic(); delete missing.failures[0].agent_code; malformed.push(missing);
+  const extra = diagnostic(); extra.failures[0].raw_error = 'PRIVATE-CANARY'; malformed.push(extra);
+  const rejected = diagnostic(); Object.assign(rejected.failures[0], {
+    category: 'agent_rejected', agent_code: 'PRIVATE-CANARY',
+  }); malformed.push(rejected);
+  const noAgentCode = diagnostic(); noAgentCode.failures[0].category = 'agent_rejected'; malformed.push(noAgentCode);
+  for (current of malformed) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.status, 'failed'); assert.equal(result.code, 'invalid_core_report');
+    assert.equal(result.storage, null); assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-CANARY'));
+  }
+  assert.equal((await lstat(fixture.config.stateDirectory)).isDirectory(), true);
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('diagnostics cannot contradict completion or appear on another operation', async t => {
+  let current = diagnostic({ failures: [] });
+  const fixture = await setup(t, { process: fakeProcess(async operation => ({
+    raw: { ...coreReport(operation), deposit_diagnostics: current },
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  assert.equal((await fixture.adapter.deposit(request)).status, 'complete');
+  for (current of [diagnostic(), diagnostic({ failures: [], omitted_failures: 1 })]) {
+    assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+  }
+  current = diagnostic({ failures: [] });
+  assert.equal((await fixture.adapter.status()).code, 'invalid_core_report');
+  assert.equal((await fixture.adapter.progress()).code, 'invalid_core_report');
+  assert.equal((await fixture.adapter.delete()).code, 'invalid_core_report');
+});
+
 test('optional copies=2 is only compatibility and never an application-selected CLI target', async t => {
   const fixture = await setup(t, { existing: false, configChanges: { copies: 2 } });
   assert.equal((await fixture.adapter.create({ input: fixture.input, sha256: SHA, alreadyEncrypted: true })).status, 'complete');

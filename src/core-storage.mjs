@@ -17,6 +17,11 @@ const REPAIR_FIELDS = ['placement_authorizations', 'retained_copy_records', 'pen
   'desired_copies_per_fragment', 'replacement_overhead_included'];
 const HASH = /^[a-f0-9]{64}$/;
 const OPERATIONS = new Set(['create', 'deposit', 'status', 'progress', 'restore', 'renew', 'delete']);
+const DEPOSIT_OPERATIONS = new Set(['prepare', 'reserve', 'progress', 'append', 'finalize', 'renew', 'read_range', 'delete']);
+const DEPOSIT_STAGES = new Set(['journal_open', 'authorization', 'agent_ready', 'challenge', 'signed_request',
+  'wire_receipt', 'agent_terminal', 'accounting', 'local_input', 'receipt_validation', 'journal_save', 'deadline', 'unknown']);
+const DEPOSIT_CATEGORIES = new Set(['io', 'timeout', 'protocol', 'agent_rejected', 'invalid', 'busy', 'store', 'unknown']);
+const DEPOSIT_AGENT_CODES = new Set(['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY', 'unknown']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
@@ -154,6 +159,28 @@ function configuration(raw) {
 }
 
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
+function depositDiagnostics(raw, fragments, complete) {
+  const check = value => requireThat(value, 'invalid_core_report');
+  const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
+    && keys.every(key => Object.hasOwn(value, key));
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && raw.version === 1
+    && Array.isArray(raw.failures) && raw.failures.length <= 8
+    && integer(raw.omitted_failures, 0, 2048)
+    && (!complete || (raw.failures.length === 0 && raw.omitted_failures === 0)));
+  const failures = raw.failures.map(failure => {
+    check(exactKeys(failure, ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code']));
+    const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
+    // This bridge consumes fragment reports, never the replica-only null index.
+    check(integer(fragment_index, 0, fragments.length - 1)
+      && integer(copy_index, 0, fragments[fragment_index].copies.length - 1)
+      && DEPOSIT_OPERATIONS.has(operation) && DEPOSIT_STAGES.has(stage) && DEPOSIT_CATEGORIES.has(category)
+      && (category === 'agent_rejected' ? DEPOSIT_AGENT_CODES.has(agent_code) : agent_code === null));
+    return Object.freeze({ fragment_index, copy_index, operation, stage, category, agent_code });
+  });
+  // Diagnostic evidence does not alter completion, accounting, retry or cleanup.
+  return Object.freeze({ version: 1, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
+}
+
 function summary(raw, operation) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
@@ -259,6 +286,10 @@ function summary(raw, operation) {
   if (repaired) {
     result.report_version = 2;
     for (const key of REPAIR_FIELDS) result[key] = raw[key];
+  }
+  if (Object.hasOwn(raw, 'deposit_diagnostics')) {
+    check(operation === 'deposit');
+    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete);
   }
   return Object.freeze(result);
 }
