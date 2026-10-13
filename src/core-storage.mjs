@@ -163,10 +163,14 @@ function depositDiagnostics(raw, fragments, complete) {
   const check = value => requireThat(value, 'invalid_core_report');
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
+  const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
   check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && raw.version === 1
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
+    && raw.failures.length + raw.omitted_failures <= retainedCopies
+    && (raw.omitted_failures === 0 || raw.failures.length === 8)
     && (!complete || (raw.failures.length === 0 && raw.omitted_failures === 0)));
+  const seen = new Set();
   const failures = raw.failures.map(failure => {
     check(exactKeys(failure, ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code']));
     const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
@@ -175,6 +179,9 @@ function depositDiagnostics(raw, fragments, complete) {
       && integer(copy_index, 0, fragments[fragment_index].copies.length - 1)
       && DEPOSIT_OPERATIONS.has(operation) && DEPOSIT_STAGES.has(stage) && DEPOSIT_CATEGORIES.has(category)
       && (category === 'agent_rejected' ? DEPOSIT_AGENT_CODES.has(agent_code) : agent_code === null));
+    const copy = `${fragment_index}:${copy_index}`;
+    check(!seen.has(copy));
+    seen.add(copy);
     return Object.freeze({ fragment_index, copy_index, operation, stage, category, agent_code });
   });
   // Diagnostic evidence does not alter completion, accounting, retry or cleanup.

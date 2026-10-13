@@ -247,13 +247,42 @@ test('diagnostic bounds use the already verified retained fragment/copy geometry
   const raw = repairedReport('deposit', 'pending', 6);
   raw.deposit_diagnostics = diagnostic({ failures: Array.from({ length: 8 }, (_, copy_index) => ({
     ...diagnostic().failures[0], copy_index,
-  })), omitted_failures: 2048 });
+  })), omitted_failures: 4 });
   const fixture = await setup(t, { process: fakeProcess(async () => ({ raw, code: 1 })) });
   const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
   assert.equal(result.status, 'incomplete');
   assert.equal(result.storage.report_version, 2);
   assert.equal(result.storage.retained_copy_records, 12);
   assert.deepEqual(result.storage.deposit_diagnostics, raw.deposit_diagnostics);
+});
+
+test('diagnostic omissions and uniqueness are bounded by actual retained copies, not only the global maximum', async t => {
+  const good = diagnostic({ failures: Array.from({ length: 8 }, (_, copy_index) => ({
+    ...diagnostic().failures[0], copy_index,
+  })), omitted_failures: 4 });
+  let current;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...repairedReport('deposit', 'pending', 6), deposit_diagnostics: current }, code: 1,
+  })) });
+  for (const kind of ['global_maximum', 'one_excess', 'short_filled', 'empty_shown', 'duplicate', 'duplicate_other_stage']) {
+    current = structuredClone(good);
+    if (kind === 'global_maximum') current.omitted_failures = 2048;
+    else if (kind === 'one_excess') current.omitted_failures = 5;
+    else if (kind === 'short_filled') { current.failures.pop(); current.omitted_failures = 1; }
+    else if (kind === 'empty_shown') { current.failures = []; current.omitted_failures = 1; }
+    else {
+      current.failures[7] = { ...current.failures[0] };
+      if (kind === 'duplicate_other_stage') current.failures[7].stage = 'agent_terminal';
+    }
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.status, 'failed', kind);
+    assert.equal(result.code, 'invalid_core_report', kind);
+    assert.equal(result.storage, null);
+  }
+  current = diagnostic({ failures: [diagnostic().failures[0], { ...diagnostic().failures[0], fragment_index: 1 }] });
+  const distinct = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+  assert.equal(distinct.status, 'incomplete');
+  assert.deepEqual(distinct.storage.deposit_diagnostics, current);
 });
 
 test('malformed or leaking diagnostics fail closed without forwarding raw strings or changing the journal', async t => {
