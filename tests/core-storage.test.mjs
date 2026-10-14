@@ -213,6 +213,98 @@ function diagnosticV5(detail = null, changes = {}) {
   return { ...diagnosticV4(null, { ...diagnosticV2(detail).failures[0], ...changes }), version: 5 };
 }
 
+function diagnosticV6(detail = null, changes = {}) {
+  return { ...diagnosticV5(detail, changes), version: 6 };
+}
+
+const CHALLENGE_PHASES = ['selector_write_flush', 'grant_write_flush', 'challenge_read_verify'];
+const ELAPSED_BUCKETS = ['under_1s', '1_to_5s', '5_to_15s', '15_to_30s',
+  '30_to_60s', '60_to_90s', '90_to_120s', 'at_least_120s'];
+
+test('v6 challenge phases and independent elapsed buckets preserve custody, accounting and retry authority', async t => {
+  let current = diagnosticV5();
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const journal = join(fixture.config.stateDirectory, 'owner-state');
+  await writeFile(journal, 'PRIVATE-CHALLENGE-CANARY', { mode: 0o600 });
+  const baseline = await fixture.adapter.deposit(request);
+  const { deposit_diagnostics: ignored, ...expectedAccounting } = baseline.storage;
+  const detail = { stage: 'challenge', deadline_scope: 'none', tls_failure: null, stream_failure: null, challenge: null };
+  const cases = [diagnosticV6(), diagnosticV6(detail), diagnosticV6({ ...detail, stage: 'stream_open', stream_failure: 'flow_acquire' }),
+    diagnosticV6({ ...detail, stage: 'tls_handshake', tls_failure: 'io' }),
+    { ...diagnosticV4({ status: 'observed', detail: { phase: 'remote_receipt_read', category: 'io', deadline_scope: 'none' } }), version: 6 }];
+  for (const phase of CHALLENGE_PHASES) for (const before_challenge of ELAPSED_BUCKETS) {
+    for (const in_challenge of ELAPSED_BUCKETS) for (const deadline_scope of ['none', 'operation', 'exchange']) {
+      cases.push(diagnosticV6({ ...detail, deadline_scope, challenge: { phase, before_challenge, in_challenge } }));
+    }
+  }
+  for (current of cases) {
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    assert.deepEqual(accounting, expectedAccounting);
+    assert.deepEqual({ ...result, storage: baseline.storage }, baseline);
+    const retained = deposit_diagnostics.failures[0].agent_detail;
+    if (retained !== null) assert.ok(Object.isFrozen(retained));
+    if (retained?.challenge) assert.ok(Object.isFrozen(retained.challenge));
+    assert.deepEqual(fixture.calls.at(-1).args, fixture.calls[0].args);
+    for (const secret of [fixture.root, ...KEYS, 'PRIVATE-CHALLENGE-CANARY']) assert.ok(!JSON.stringify(result).includes(secret));
+  }
+  assert.equal(await readFile(journal, 'utf8'), 'PRIVATE-CHALLENGE-CANARY');
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('v6 rejects challenge scope or timing inventions and never adds fields to v1-v5', async t => {
+  let current;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const challenge = { phase: 'challenge_read_verify', before_challenge: '1_to_5s', in_challenge: '60_to_90s' };
+  const detail = { stage: 'challenge', deadline_scope: 'operation', tls_failure: null, stream_failure: null, challenge };
+  const invalid = [diagnosticV6({ ...detail, extra: 'PRIVATE-CHALLENGE-CANARY' }),
+    diagnosticV6({ ...detail, challenge: { ...challenge, elapsed_ms: 65000 } }),
+    diagnosticV6(detail, { stage: 'agent_terminal' }), diagnosticV6(detail, { category: 'io', agent_code: null }),
+    diagnosticV6(detail, { agent_outcome: { status: 'missing', detail: null } }),
+    { ...diagnosticV6(detail), version: 7 }];
+  for (const agent_code of ['CONTENT_POLICY', 'CONTENT_BUSY', 'CONTENT_INVALID', 'unknown', null]) invalid.push(diagnosticV6(detail, { agent_code }));
+  for (const stage of ['stream_open', 'tls_handshake', 'provider_lookup', 'unobserved']) invalid.push(diagnosticV6({ ...detail, stage }));
+  for (const deadline_scope of ['bridge', 'remote_wire', '', null, false]) invalid.push(diagnosticV6({ ...detail, deadline_scope }));
+  for (const value of ['PRIVATE-CHALLENGE-CANARY', 'unknown', '', 0, false, [], {}]) invalid.push(diagnosticV6({ ...detail, challenge: value }));
+  for (const field of Object.keys(challenge)) {
+    for (const value of ['PRIVATE-CHALLENGE-CANARY', 'unknown', '', 0, false, null, [], {}, 120000]) {
+      invalid.push(diagnosticV6({ ...detail, challenge: { ...challenge, [field]: value } }));
+    }
+    const missing = { ...challenge }; delete missing[field]; invalid.push(diagnosticV6({ ...detail, challenge: missing }));
+  }
+  for (const field of Object.keys(detail)) {
+    const missing = { ...detail }; delete missing[field]; invalid.push(diagnosticV6(missing));
+  }
+  invalid.push(diagnosticV6({ ...detail, tls_failure: 'io' }), diagnosticV6({ ...detail, stream_failure: 'flow_acquire' }));
+  for (const version of [1, 2, 3, 4, 5]) for (const injected of [null, challenge]) {
+    const historical = version === 1 ? diagnostic() : diagnosticV2({ stage: 'challenge', deadline_scope: 'none' });
+    historical.version = version;
+    if (version === 1) historical.failures[0].agent_detail = { challenge: injected };
+    else {
+      if (version >= 3) historical.failures[0].agent_detail.tls_failure = null;
+      if (version >= 4) historical.failures[0].agent_outcome = null;
+      if (version >= 5) historical.failures[0].agent_detail.stream_failure = null;
+      historical.failures[0].agent_detail.challenge = injected;
+    }
+    invalid.push(historical);
+  }
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-CHALLENGE-CANARY'));
+  }
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
 const STREAM_FAILURES = ['policy', 'route_state', 'route_material', 'flow_acquire', 'transport_certificate',
   'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment'];
 
@@ -378,7 +470,7 @@ test('v4 rejects counterfeit outcomes, leaking fields, wrong phase budgets and l
     'accounting', 'local_input', 'receipt_validation', 'journal_save', 'unknown']) {
     invalid.push(diagnosticV4(good, { stage }), diagnosticV4({ status: 'missing', detail: null }, { stage }));
   }
-  for (const version of [1, 2, 3, 6]) invalid.push({ ...diagnosticV4(good), version });
+  for (const version of [1, 2, 3, 7]) invalid.push({ ...diagnosticV4(good), version });
   invalid.push(diagnosticV4(good, { agent_detail: { stage: 'tls_handshake', deadline_scope: 'none', tls_failure: 'io' } }),
     diagnosticV4(null, { ...diagnosticV2({ stage: 'tls_handshake', deadline_scope: 'none' }).failures[0] }));
   for (current of invalid) {

@@ -28,6 +28,9 @@ const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challe
 const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
 const DEPOSIT_STREAM_FAILURES = new Set(['policy', 'route_state', 'route_material', 'flow_acquire',
   'transport_certificate', 'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment']);
+const DEPOSIT_CHALLENGE_PHASES = new Set(['selector_write_flush', 'grant_write_flush', 'challenge_read_verify']);
+const DEPOSIT_ELAPSED_BUCKETS = new Set(['under_1s', '1_to_5s', '5_to_15s', '15_to_30s',
+  '30_to_60s', '60_to_90s', '90_to_120s', 'at_least_120s']);
 const DEPOSIT_OUTCOME_STATUSES = new Set(['observed', 'missing', 'pending', 'expired', 'query_failed', 'query_timeout']);
 // Ordered like the core's nonzero PrivateStorageOutcomePhase discriminants (1..21).
 const DEPOSIT_OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify',
@@ -181,7 +184,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
-  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4, 5].includes(raw.version)
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4, 5, 6].includes(raw.version)
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -209,6 +212,7 @@ function depositDiagnostics(raw, fragments, complete) {
         const detailKeys = ['stage', 'deadline_scope'];
         if (raw.version >= 3) detailKeys.push('tls_failure');
         if (raw.version >= 5) detailKeys.push('stream_failure');
+        if (raw.version >= 6) detailKeys.push('challenge');
         check(exactKeys(detail, detailKeys)
           && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
           && DEPOSIT_AGENT_STAGES.has(detail.stage)
@@ -226,11 +230,23 @@ function depositDiagnostics(raw, fragments, complete) {
             && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
             && detail.tls_failure === null && agent_code === 'CONTENT_UNAVAILABLE'));
         }
+        if (raw.version >= 6) {
+          const challenge = detail.challenge;
+          check(challenge === null || (exactKeys(challenge, ['phase', 'before_challenge', 'in_challenge'])
+            && DEPOSIT_CHALLENGE_PHASES.has(challenge.phase)
+            && DEPOSIT_ELAPSED_BUCKETS.has(challenge.before_challenge)
+            && DEPOSIT_ELAPSED_BUCKETS.has(challenge.in_challenge)
+            && detail.stage === 'challenge' && detail.tls_failure === null && detail.stream_failure === null
+            && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
       }
       closed.agent_detail = detail === null ? null
         : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
           ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}),
-          ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}) });
+          ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}),
+          ...(raw.version >= 6 ? { challenge: detail.challenge === null ? null
+            : Object.freeze({ phase: detail.challenge.phase, before_challenge: detail.challenge.before_challenge,
+              in_challenge: detail.challenge.in_challenge }) } : {}) });
     }
     if (raw.version >= 4) {
       const outcome = failure.agent_outcome;
