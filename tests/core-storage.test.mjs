@@ -209,6 +209,83 @@ function diagnosticV4(outcome = null, changes = {}) {
     agent_detail: null, agent_outcome: outcome, ...changes }] };
 }
 
+function diagnosticV5(detail = null, changes = {}) {
+  return { ...diagnosticV4(null, { ...diagnosticV2(detail).failures[0], ...changes }), version: 5 };
+}
+
+const STREAM_FAILURES = ['policy', 'route_state', 'route_material', 'flow_acquire', 'transport_certificate',
+  'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment'];
+
+test('v5 finite stream classes preserve accounting, journals, immutable details and exact retry argv', async t => {
+  let current = diagnosticV4();
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const journal = join(fixture.config.stateDirectory, 'owner-state');
+  await writeFile(journal, 'PRIVATE-STREAM-CANARY', { mode: 0o600 });
+  const baseline = await fixture.adapter.deposit(request);
+  const { deposit_diagnostics: ignored, ...expectedAccounting } = baseline.storage;
+  const cases = [diagnosticV5(), ...[null, ...STREAM_FAILURES].map(stream_failure => diagnosticV5({
+    stage: 'stream_open', deadline_scope: 'none', tls_failure: null, stream_failure,
+  })), diagnosticV5({ stage: 'tls_handshake', deadline_scope: 'none', tls_failure: 'io', stream_failure: null }),
+  diagnosticV5({ stage: 'stream_open', deadline_scope: 'exchange', tls_failure: null, stream_failure: null }),
+  { ...diagnosticV4({ status: 'observed', detail: { phase: 'remote_receipt_read', category: 'io', deadline_scope: 'none' } }), version: 5 }];
+  for (current of cases) {
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    assert.deepEqual(accounting, expectedAccounting);
+    assert.deepEqual({ ...result, storage: baseline.storage }, baseline);
+    assert.ok(Object.isFrozen(deposit_diagnostics) && Object.isFrozen(deposit_diagnostics.failures[0]));
+    if (deposit_diagnostics.failures[0].agent_detail) assert.ok(Object.isFrozen(deposit_diagnostics.failures[0].agent_detail));
+    assert.deepEqual(fixture.calls.at(-1).args, fixture.calls[0].args);
+    for (const secret of [fixture.root, ...KEYS, 'PRIVATE-STREAM-CANARY']) assert.ok(!JSON.stringify(result).includes(secret));
+  }
+  assert.equal(await readFile(journal, 'utf8'), 'PRIVATE-STREAM-CANARY');
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('v5 rejects unbound or leaking stream details and preserves exact historical schemas', async t => {
+  let current;
+  const fixture = await setup(t, { process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const detail = { stage: 'stream_open', deadline_scope: 'none', tls_failure: null, stream_failure: 'flow_acquire' };
+  const invalid = [diagnosticV5({ ...detail, raw: 'PRIVATE-STREAM-CANARY' }),
+    diagnosticV5(detail, { stage: 'wire_receipt' }), diagnosticV5(detail, { category: 'io', agent_code: null }),
+    diagnosticV5(detail, { agent_outcome: { status: 'missing', detail: null } })];
+  for (const stream_failure of ['', 'PRIVATE-STREAM-CANARY', 'unknown', 0, false, [], {}]) invalid.push(diagnosticV5({ ...detail, stream_failure }));
+  for (const stage of ['unobserved', 'route_connect', 'control_selection', 'provider_lookup', 'provider_cardinality',
+    'offer_validity', 'tls_handshake', 'challenge']) invalid.push(diagnosticV5({ ...detail, stage }));
+  for (const deadline_scope of ['operation', 'exchange']) invalid.push(diagnosticV5({ ...detail, deadline_scope }));
+  for (const tls_failure of ['io', 'authentication']) invalid.push(diagnosticV5({ ...detail, tls_failure }));
+  for (const agent_code of ['CONTENT_POLICY', 'CONTENT_BUSY', 'CONTENT_INVALID', 'unknown', null]) invalid.push(diagnosticV5(detail, { agent_code }));
+  for (const key of Object.keys(detail)) {
+    const missing = { ...detail }; delete missing[key]; invalid.push(diagnosticV5(missing));
+  }
+  for (const version of [1, 2, 3, 4]) {
+    const historical = version === 1 ? diagnostic() : version === 2 ? diagnosticV2(detail)
+      : version === 3 ? diagnosticV3(detail) : diagnosticV4(null, diagnosticV2(detail).failures[0]);
+    if (version === 1) historical.failures[0].agent_detail = detail;
+    invalid.push(historical);
+    const nullableInjection = structuredClone(historical);
+    nullableInjection.failures[0].agent_detail.stream_failure = null; invalid.push(nullableInjection);
+  }
+  const missingOutcome = diagnosticV5(detail); delete missingOutcome.failures[0].agent_outcome; invalid.push(missingOutcome);
+  const duplicate = diagnosticV5(detail); duplicate.failures.push(duplicate.failures[0]); invalid.push(duplicate);
+  invalid.push({ ...diagnosticV5(detail), omitted_failures: 1 });
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-STREAM-CANARY'));
+  }
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
 const OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify', 'local_payload_read',
   'local_payload_verify', 'admission', 'remote_request_verify', 'remote_request_write', 'remote_payload_write',
   'remote_receipt_read', 'remote_receipt_verify', 'remote_payload_read', 'remote_payload_verify',
@@ -301,7 +378,7 @@ test('v4 rejects counterfeit outcomes, leaking fields, wrong phase budgets and l
     'accounting', 'local_input', 'receipt_validation', 'journal_save', 'unknown']) {
     invalid.push(diagnosticV4(good, { stage }), diagnosticV4({ status: 'missing', detail: null }, { stage }));
   }
-  for (const version of [1, 2, 3, 5]) invalid.push({ ...diagnosticV4(good), version });
+  for (const version of [1, 2, 3, 6]) invalid.push({ ...diagnosticV4(good), version });
   invalid.push(diagnosticV4(good, { agent_detail: { stage: 'tls_handshake', deadline_scope: 'none', tls_failure: 'io' } }),
     diagnosticV4(null, { ...diagnosticV2({ stage: 'tls_handshake', deadline_scope: 'none' }).failures[0] }));
   for (current of invalid) {

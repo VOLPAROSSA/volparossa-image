@@ -26,6 +26,8 @@ const DEPOSIT_AGENT_STAGES = new Set(['unobserved', 'route_connect', 'control_se
   'provider_cardinality', 'offer_validity', 'stream_open', 'tls_handshake', 'challenge']);
 const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challenge']);
 const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
+const DEPOSIT_STREAM_FAILURES = new Set(['policy', 'route_state', 'route_material', 'flow_acquire',
+  'transport_certificate', 'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment']);
 const DEPOSIT_OUTCOME_STATUSES = new Set(['observed', 'missing', 'pending', 'expired', 'query_failed', 'query_timeout']);
 // Ordered like the core's nonzero PrivateStorageOutcomePhase discriminants (1..21).
 const DEPOSIT_OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify',
@@ -179,7 +181,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
-  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4].includes(raw.version)
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4, 5].includes(raw.version)
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -189,7 +191,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const failures = raw.failures.map(failure => {
     const keys = ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code'];
     if (raw.version !== 1) keys.push('agent_detail');
-    if (raw.version === 4) keys.push('agent_outcome');
+    if (raw.version >= 4) keys.push('agent_outcome');
     check(exactKeys(failure, keys));
     const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
     // This bridge consumes fragment reports, never the replica-only null index.
@@ -206,6 +208,7 @@ function depositDiagnostics(raw, fragments, complete) {
       if (detail !== null) {
         const detailKeys = ['stage', 'deadline_scope'];
         if (raw.version >= 3) detailKeys.push('tls_failure');
+        if (raw.version >= 5) detailKeys.push('stream_failure');
         check(exactKeys(detail, detailKeys)
           && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
           && DEPOSIT_AGENT_STAGES.has(detail.stage)
@@ -218,12 +221,18 @@ function depositDiagnostics(raw, fragments, complete) {
             && detail.stage === 'tls_handshake' && detail.deadline_scope === 'none'
             && agent_code === 'CONTENT_UNAVAILABLE'));
         }
+        if (raw.version >= 5) {
+          check(detail.stream_failure === null || (DEPOSIT_STREAM_FAILURES.has(detail.stream_failure)
+            && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
+            && detail.tls_failure === null && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
       }
       closed.agent_detail = detail === null ? null
         : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
-          ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}) });
+          ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}),
+          ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}) });
     }
-    if (raw.version === 4) {
+    if (raw.version >= 4) {
       const outcome = failure.agent_outcome;
       if (outcome !== null) {
         check(exactKeys(outcome, ['status', 'detail']) && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
