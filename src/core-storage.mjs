@@ -17,6 +17,28 @@ const REPAIR_FIELDS = ['placement_authorizations', 'retained_copy_records', 'pen
   'desired_copies_per_fragment', 'replacement_overhead_included'];
 const HASH = /^[a-f0-9]{64}$/;
 const OPERATIONS = new Set(['create', 'deposit', 'status', 'progress', 'restore', 'renew', 'delete']);
+const DEPOSIT_OPERATIONS = new Set(['prepare', 'reserve', 'progress', 'append', 'finalize', 'renew', 'read_range', 'delete']);
+const DEPOSIT_STAGES = new Set(['journal_open', 'authorization', 'agent_ready', 'challenge', 'signed_request',
+  'wire_receipt', 'agent_terminal', 'accounting', 'local_input', 'receipt_validation', 'journal_save', 'deadline', 'unknown']);
+const DEPOSIT_CATEGORIES = new Set(['io', 'timeout', 'protocol', 'agent_rejected', 'invalid', 'busy', 'store', 'unknown']);
+const DEPOSIT_AGENT_CODES = new Set(['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY', 'unknown']);
+const DEPOSIT_AGENT_STAGES = new Set(['unobserved', 'route_connect', 'control_selection', 'provider_lookup',
+  'provider_cardinality', 'offer_validity', 'stream_open', 'tls_handshake', 'challenge']);
+const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challenge']);
+const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
+const DEPOSIT_STREAM_FAILURES = new Set(['policy', 'route_state', 'route_material', 'flow_acquire',
+  'transport_certificate', 'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment']);
+const DEPOSIT_OUTCOME_STATUSES = new Set(['observed', 'missing', 'pending', 'expired', 'query_failed', 'query_timeout']);
+// Ordered like the core's nonzero PrivateStorageOutcomePhase discriminants (1..21).
+const DEPOSIT_OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify',
+  'local_payload_read', 'local_payload_verify', 'admission', 'remote_request_verify', 'remote_request_write',
+  'remote_payload_write', 'remote_receipt_read', 'remote_receipt_verify', 'remote_payload_read',
+  'remote_payload_verify', 'local_receipt_write', 'local_payload_write', 'provider_tls_close',
+  'transport_tls_close', 'final_route_check', 'final_grant_check', 'final_lifetime_check', 'terminal_write'];
+const DEPOSIT_OUTCOME_CATEGORIES = new Set(['io', 'auth', 'invalid', 'busy', 'store', 'expired', 'entropy',
+  'timeout', 'policy', 'unavailable', 'cancelled']);
+const DEPOSIT_OUTCOME_STAGES = new Set(['wire_receipt', 'agent_terminal', 'deadline']);
+const DEPOSIT_OUTCOME_DEADLINES = new Set(['none', 'operation', 'exchange', 'bridge', 'remote_wire']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
@@ -154,6 +176,87 @@ function configuration(raw) {
 }
 
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
+function depositDiagnostics(raw, fragments, complete) {
+  const check = value => requireThat(value, 'invalid_core_report');
+  const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
+    && keys.every(key => Object.hasOwn(value, key));
+  const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4, 5].includes(raw.version)
+    && Array.isArray(raw.failures) && raw.failures.length <= 8
+    && integer(raw.omitted_failures, 0, 2048)
+    && raw.failures.length + raw.omitted_failures <= retainedCopies
+    && (raw.omitted_failures === 0 || raw.failures.length === 8)
+    && (!complete || (raw.failures.length === 0 && raw.omitted_failures === 0)));
+  const seen = new Set();
+  const failures = raw.failures.map(failure => {
+    const keys = ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code'];
+    if (raw.version !== 1) keys.push('agent_detail');
+    if (raw.version >= 4) keys.push('agent_outcome');
+    check(exactKeys(failure, keys));
+    const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
+    // This bridge consumes fragment reports, never the replica-only null index.
+    check(integer(fragment_index, 0, fragments.length - 1)
+      && integer(copy_index, 0, fragments[fragment_index].copies.length - 1)
+      && DEPOSIT_OPERATIONS.has(operation) && DEPOSIT_STAGES.has(stage) && DEPOSIT_CATEGORIES.has(category)
+      && (category === 'agent_rejected' ? DEPOSIT_AGENT_CODES.has(agent_code) : agent_code === null));
+    const copy = `${fragment_index}:${copy_index}`;
+    check(!seen.has(copy));
+    seen.add(copy);
+    const closed = { fragment_index, copy_index, operation, stage, category, agent_code };
+    if (raw.version !== 1) {
+      const detail = failure.agent_detail;
+      if (detail !== null) {
+        const detailKeys = ['stage', 'deadline_scope'];
+        if (raw.version >= 3) detailKeys.push('tls_failure');
+        if (raw.version >= 5) detailKeys.push('stream_failure');
+        check(exactKeys(detail, detailKeys)
+          && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
+          && DEPOSIT_AGENT_STAGES.has(detail.stage)
+          && ['none', 'operation', 'exchange'].includes(detail.deadline_scope)
+          && (detail.stage !== 'unobserved' || detail.deadline_scope === 'operation')
+          && (detail.deadline_scope !== 'exchange' || DEPOSIT_EXCHANGE_STAGES.has(detail.stage))
+          && (detail.deadline_scope === 'none' || agent_code === 'CONTENT_UNAVAILABLE'));
+        if (raw.version >= 3) {
+          check(detail.tls_failure === null || (DEPOSIT_TLS_FAILURES.has(detail.tls_failure)
+            && detail.stage === 'tls_handshake' && detail.deadline_scope === 'none'
+            && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
+        if (raw.version >= 5) {
+          check(detail.stream_failure === null || (DEPOSIT_STREAM_FAILURES.has(detail.stream_failure)
+            && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
+            && detail.tls_failure === null && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
+      }
+      closed.agent_detail = detail === null ? null
+        : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
+          ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}),
+          ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}) });
+    }
+    if (raw.version >= 4) {
+      const outcome = failure.agent_outcome;
+      if (outcome !== null) {
+        check(exactKeys(outcome, ['status', 'detail']) && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
+          && DEPOSIT_OUTCOME_STAGES.has(stage));
+        const detail = outcome.detail;
+        if (outcome.status === 'observed') {
+          check(exactKeys(detail, ['phase', 'category', 'deadline_scope'])
+            && DEPOSIT_OUTCOME_PHASES.includes(detail.phase) && DEPOSIT_OUTCOME_CATEGORIES.has(detail.category)
+            && DEPOSIT_OUTCOME_DEADLINES.has(detail.deadline_scope)
+            && (detail.category === 'timeout') === (detail.deadline_scope !== 'none')
+            && (detail.deadline_scope !== 'bridge' || DEPOSIT_OUTCOME_PHASES.slice(1, 15).includes(detail.phase))
+            && (detail.deadline_scope !== 'remote_wire' || DEPOSIT_OUTCOME_PHASES.slice(6, 13).includes(detail.phase)));
+        } else check(detail === null);
+      }
+      closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
+        detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
+          category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }) });
+    }
+    return Object.freeze(closed);
+  });
+  // Diagnostic evidence does not alter completion, accounting, retry or cleanup.
+  return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
+}
+
 function summary(raw, operation) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
@@ -259,6 +362,10 @@ function summary(raw, operation) {
   if (repaired) {
     result.report_version = 2;
     for (const key of REPAIR_FIELDS) result[key] = raw[key];
+  }
+  if (Object.hasOwn(raw, 'deposit_diagnostics')) {
+    check(operation === 'deposit');
+    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete);
   }
   return Object.freeze(result);
 }
