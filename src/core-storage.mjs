@@ -26,6 +26,17 @@ const DEPOSIT_AGENT_STAGES = new Set(['unobserved', 'route_connect', 'control_se
   'provider_cardinality', 'offer_validity', 'stream_open', 'tls_handshake', 'challenge']);
 const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challenge']);
 const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
+const DEPOSIT_OUTCOME_STATUSES = new Set(['observed', 'missing', 'pending', 'expired', 'query_failed', 'query_timeout']);
+// Ordered like the core's nonzero PrivateStorageOutcomePhase discriminants (1..21).
+const DEPOSIT_OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify',
+  'local_payload_read', 'local_payload_verify', 'admission', 'remote_request_verify', 'remote_request_write',
+  'remote_payload_write', 'remote_receipt_read', 'remote_receipt_verify', 'remote_payload_read',
+  'remote_payload_verify', 'local_receipt_write', 'local_payload_write', 'provider_tls_close',
+  'transport_tls_close', 'final_route_check', 'final_grant_check', 'final_lifetime_check', 'terminal_write'];
+const DEPOSIT_OUTCOME_CATEGORIES = new Set(['io', 'auth', 'invalid', 'busy', 'store', 'expired', 'entropy',
+  'timeout', 'policy', 'unavailable', 'cancelled']);
+const DEPOSIT_OUTCOME_STAGES = new Set(['wire_receipt', 'agent_terminal', 'deadline']);
+const DEPOSIT_OUTCOME_DEADLINES = new Set(['none', 'operation', 'exchange', 'bridge', 'remote_wire']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
@@ -168,7 +179,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
-  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3].includes(raw.version)
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4].includes(raw.version)
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -178,6 +189,7 @@ function depositDiagnostics(raw, fragments, complete) {
   const failures = raw.failures.map(failure => {
     const keys = ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code'];
     if (raw.version !== 1) keys.push('agent_detail');
+    if (raw.version === 4) keys.push('agent_outcome');
     check(exactKeys(failure, keys));
     const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
     // This bridge consumes fragment reports, never the replica-only null index.
@@ -193,7 +205,7 @@ function depositDiagnostics(raw, fragments, complete) {
       const detail = failure.agent_detail;
       if (detail !== null) {
         const detailKeys = ['stage', 'deadline_scope'];
-        if (raw.version === 3) detailKeys.push('tls_failure');
+        if (raw.version >= 3) detailKeys.push('tls_failure');
         check(exactKeys(detail, detailKeys)
           && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
           && DEPOSIT_AGENT_STAGES.has(detail.stage)
@@ -201,7 +213,7 @@ function depositDiagnostics(raw, fragments, complete) {
           && (detail.stage !== 'unobserved' || detail.deadline_scope === 'operation')
           && (detail.deadline_scope !== 'exchange' || DEPOSIT_EXCHANGE_STAGES.has(detail.stage))
           && (detail.deadline_scope === 'none' || agent_code === 'CONTENT_UNAVAILABLE'));
-        if (raw.version === 3) {
+        if (raw.version >= 3) {
           check(detail.tls_failure === null || (DEPOSIT_TLS_FAILURES.has(detail.tls_failure)
             && detail.stage === 'tls_handshake' && detail.deadline_scope === 'none'
             && agent_code === 'CONTENT_UNAVAILABLE'));
@@ -209,7 +221,26 @@ function depositDiagnostics(raw, fragments, complete) {
       }
       closed.agent_detail = detail === null ? null
         : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
-          ...(raw.version === 3 ? { tls_failure: detail.tls_failure } : {}) });
+          ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}) });
+    }
+    if (raw.version === 4) {
+      const outcome = failure.agent_outcome;
+      if (outcome !== null) {
+        check(exactKeys(outcome, ['status', 'detail']) && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
+          && DEPOSIT_OUTCOME_STAGES.has(stage));
+        const detail = outcome.detail;
+        if (outcome.status === 'observed') {
+          check(exactKeys(detail, ['phase', 'category', 'deadline_scope'])
+            && DEPOSIT_OUTCOME_PHASES.includes(detail.phase) && DEPOSIT_OUTCOME_CATEGORIES.has(detail.category)
+            && DEPOSIT_OUTCOME_DEADLINES.has(detail.deadline_scope)
+            && (detail.category === 'timeout') === (detail.deadline_scope !== 'none')
+            && (detail.deadline_scope !== 'bridge' || DEPOSIT_OUTCOME_PHASES.slice(1, 15).includes(detail.phase))
+            && (detail.deadline_scope !== 'remote_wire' || DEPOSIT_OUTCOME_PHASES.slice(6, 13).includes(detail.phase)));
+        } else check(detail === null);
+      }
+      closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
+        detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
+          category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }) });
     }
     return Object.freeze(closed);
   });
