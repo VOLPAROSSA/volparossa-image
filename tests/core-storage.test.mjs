@@ -221,6 +221,142 @@ const CHALLENGE_PHASES = ['selector_write_flush', 'grant_write_flush', 'challeng
 const ELAPSED_BUCKETS = ['under_1s', '1_to_5s', '5_to_15s', '15_to_30s',
   '30_to_60s', '60_to_90s', '90_to_120s', 'at_least_120s'];
 
+function diagnosticV7(append_timing = null, phase = 'remote_receipt_read', changes = {}) {
+  return { ...diagnosticV4({ status: 'observed', detail: { phase, category: 'io', deadline_scope: 'none' },
+    append_timing }, changes), version: 7 };
+}
+
+test('v7 is a strict boolean opt-in and selects only the actual fragment deposit command', async t => {
+  const fixture = await setup(t, { configChanges: { appendDiagnosticsV7: true },
+    process: fakeProcess(async operation => ({ raw: { ...coreReport(operation),
+      ...(operation === 'deposit' ? { deposit_diagnostics: { version: 7, failures: [], omitted_failures: 0 } } : {}) } })) });
+  assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).status, 'complete');
+  const args = fixture.calls[0].args;
+  assert.deepEqual(args.slice(0, 8), ['--control-socket', fixture.config.controlSocket,
+    'storage', 'fragments', 'deposit', '--state', fixture.config.stateDirectory, '--append-diagnostics-v7']);
+  assert.equal(args.filter(value => value === '--append-diagnostics-v7').length, 1);
+  for (const method of ['status', 'progress', 'delete']) {
+    await fixture.adapter[method]();
+    assert.equal(fixture.calls.at(-1).args.includes('--append-diagnostics-v7'), false);
+  }
+  for (const value of [null, 'true', 1, 0, [], {}]) {
+    await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, appendDiagnosticsV7: value }));
+    await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+  }
+});
+
+test('v7 preserves finite APPEND timing, all nullable outcomes, custody and immutable input', async t => {
+  let current = diagnosticV7();
+  const fixture = await setup(t, { configChanges: { appendDiagnosticsV7: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const journal = join(fixture.config.stateDirectory, 'owner-state');
+  await writeFile(journal, 'PRIVATE-APPEND-CANARY', { mode: 0o600 });
+  const baseline = await fixture.adapter.deposit(request);
+  const cases = [diagnosticV7(null, 'remote_receipt_read', { agent_outcome: null }),
+    ...['missing', 'pending', 'expired', 'query_failed', 'query_timeout'].map(status =>
+      diagnosticV7(null, 'remote_receipt_read', { agent_outcome: { status, detail: null, append_timing: null } })),
+    ...OUTCOME_PHASES.map(phase => diagnosticV7(null, phase)),
+    diagnosticV7(null, 'remote_receipt_read', { operation: 'finalize' })];
+  for (const before_payload of ELAPSED_BUCKETS) for (const in_payload_write_flush of ELAPSED_BUCKETS) {
+    const timing = { before_payload, in_payload_write_flush, in_receipt_read: null };
+    cases.push(diagnosticV7(timing, 'remote_payload_write'));
+    for (const in_receipt_read of ELAPSED_BUCKETS) cases.push(diagnosticV7({ ...timing, in_receipt_read }));
+  }
+  for (current of cases) {
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+    assert.deepEqual({ ...result, storage: baseline.storage }, baseline);
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    const { deposit_diagnostics: ignored, ...expectedAccounting } = baseline.storage;
+    assert.deepEqual(accounting, expectedAccounting);
+    const timing = deposit_diagnostics.failures[0].agent_outcome?.append_timing;
+    if (timing) assert.ok(Object.isFrozen(timing));
+    assert.deepEqual(fixture.calls.at(-1).args, fixture.calls[0].args);
+    for (const secret of [fixture.root, ...KEYS, 'PRIVATE-APPEND-CANARY']) assert.ok(!JSON.stringify(result).includes(secret));
+  }
+  assert.equal(await readFile(journal, 'utf8'), 'PRIVATE-APPEND-CANARY');
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('v7 rejects missing keys, invented timing, wrong phase or operation and nonobserved timing', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { appendDiagnosticsV7: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const timing = { before_payload: 'under_1s', in_payload_write_flush: '1_to_5s', in_receipt_read: '90_to_120s' };
+  const invalid = [diagnosticV7({ ...timing, phase: 'remote_receipt_read' }),
+    diagnosticV7({ ...timing, elapsed_ms: 120000 }), diagnosticV7(timing, 'remote_payload_write'),
+    diagnosticV7({ ...timing, in_receipt_read: null }),
+    ...['reserve', 'finalize'].map(operation => diagnosticV7(timing, 'remote_receipt_read', { operation })),
+    ...OUTCOME_PHASES.filter(phase => !['remote_payload_write', 'remote_receipt_read'].includes(phase))
+      .map(phase => diagnosticV7(timing, phase)),
+    ...['missing', 'pending', 'expired', 'query_failed', 'query_timeout'].map(status =>
+      diagnosticV7(null, 'remote_receipt_read', { agent_outcome: { status, detail: null, append_timing: timing } }))];
+  for (const field of Object.keys(timing)) {
+    const missing = { ...timing }; delete missing[field]; invalid.push(diagnosticV7(missing));
+    for (const value of [null, 'PRIVATE-APPEND-CANARY', '', false, 1, [], {}]) {
+      invalid.push(diagnosticV7({ ...timing, [field]: value }));
+    }
+  }
+  for (const value of ['PRIVATE-APPEND-CANARY', false, 1, [], {}]) invalid.push(diagnosticV7(value));
+  for (const field of ['status', 'detail', 'append_timing']) {
+    const missing = diagnosticV7(); delete missing.failures[0].agent_outcome[field]; invalid.push(missing);
+  }
+  const leaking = diagnosticV7(); leaking.failures[0].agent_outcome.raw = 'PRIVATE-APPEND-CANARY'; invalid.push(leaking);
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-APPEND-CANARY'));
+  }
+});
+
+test('v7 selection refuses silent downgrade, while absent or false configuration keeps v1-v6 exact', async t => {
+  const legacy = [undefined, diagnostic(), diagnosticV2(), diagnosticV3(), diagnosticV4(), diagnosticV5(), diagnosticV6()];
+  for (const configChanges of [{}, { appendDiagnosticsV7: false }, { appendDiagnosticsV7: true }]) {
+    let current;
+    const fixture = await setup(t, { configChanges, process: fakeProcess(async () => ({
+      raw: { ...coreReport('deposit', 'uncertain', false),
+        ...(current === undefined ? {} : { deposit_diagnostics: current }) }, code: 1,
+    })) });
+    for (current of [...legacy, diagnosticV7()]) {
+      const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+      const selected = configChanges.appendDiagnosticsV7 === true;
+      assert.equal(fixture.calls.at(-1).args.includes('--append-diagnostics-v7'), selected);
+      if (selected === (current?.version === 7)) {
+        assert.equal(result.status, 'incomplete');
+        assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+      } else {
+        assert.equal(result.code, 'invalid_core_report');
+        assert.equal(result.storage, null);
+      }
+    }
+    if (configChanges.appendDiagnosticsV7 !== true) {
+      for (const version of [4, 5, 6]) {
+        current = { ...diagnosticV7(), version };
+        assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).code, 'invalid_core_report');
+      }
+    }
+  }
+});
+
+test('v7 never substitutes timing for completion or accepts it on another operation', async t => {
+  let raw = { ...coreReport('deposit'), deposit_diagnostics: { version: 7, failures: [], omitted_failures: 0 } };
+  const fixture = await setup(t, { configChanges: { appendDiagnosticsV7: true },
+    process: fakeProcess(async () => ({ raw })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  assert.equal((await fixture.adapter.deposit(request)).status, 'complete');
+  raw.deposit_diagnostics = diagnosticV7();
+  assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+  raw = { ...coreReport('status'), deposit_diagnostics: { version: 7, failures: [], omitted_failures: 0 } };
+  assert.equal((await fixture.adapter.status()).code, 'invalid_core_report');
+  assert.equal(fixture.calls.at(-1).args.includes('--append-diagnostics-v7'), false);
+});
+
 test('v6 challenge phases and independent elapsed buckets preserve custody, accounting and retry authority', async t => {
   let current = diagnosticV5();
   const fixture = await setup(t, { process: fakeProcess(async () => ({

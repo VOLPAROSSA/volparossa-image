@@ -46,7 +46,7 @@ const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
 const CONFIG_KEYS = ['version', 'coreBinary', 'controlSocket', 'identity', 'passphraseFile',
-  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs'];
+  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs', 'appendDiagnosticsV7'];
 const CONSTRUCT = Symbol('private constructor');
 
 export class StorageBridgeError extends Error {
@@ -174,17 +174,19 @@ function configuration(raw) {
     && (!Object.hasOwn(raw, 'copies') || raw.copies === CORE_CREATE_COPIES)
     && integer(raw.fragmentBytes, 1, 1024 ** 3)
     && integer(raw.lifetimeSeconds, 1, 2678400)
+    && (!Object.hasOwn(raw, 'appendDiagnosticsV7') || typeof raw.appendDiagnosticsV7 === 'boolean')
     && integer(raw.deadlineMs ?? 1800000, 100, 1800000));
   return Object.freeze({ ...raw, providers: Object.freeze(providers), deadlineMs: raw.deadlineMs ?? 1800000 });
 }
 
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
-function depositDiagnostics(raw, fragments, complete) {
+function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = false) {
   const check = value => requireThat(value, 'invalid_core_report');
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
-  check(exactKeys(raw, ['version', 'failures', 'omitted_failures']) && [1, 2, 3, 4, 5, 6].includes(raw.version)
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures'])
+    && (appendDiagnosticsV7 ? raw.version === 7 : [1, 2, 3, 4, 5, 6].includes(raw.version))
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -251,7 +253,8 @@ function depositDiagnostics(raw, fragments, complete) {
     if (raw.version >= 4) {
       const outcome = failure.agent_outcome;
       if (outcome !== null) {
-        check(exactKeys(outcome, ['status', 'detail']) && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
+        check(exactKeys(outcome, raw.version === 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
+          && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
           && DEPOSIT_OUTCOME_STAGES.has(stage));
         const detail = outcome.detail;
         if (outcome.status === 'observed') {
@@ -262,10 +265,23 @@ function depositDiagnostics(raw, fragments, complete) {
             && (detail.deadline_scope !== 'bridge' || DEPOSIT_OUTCOME_PHASES.slice(1, 15).includes(detail.phase))
             && (detail.deadline_scope !== 'remote_wire' || DEPOSIT_OUTCOME_PHASES.slice(6, 13).includes(detail.phase)));
         } else check(detail === null);
+        if (raw.version === 7) {
+          const timing = outcome.append_timing;
+          check(timing === null || (exactKeys(timing, ['before_payload', 'in_payload_write_flush', 'in_receipt_read'])
+            && operation === 'append' && outcome.status === 'observed'
+            && DEPOSIT_ELAPSED_BUCKETS.has(timing.before_payload)
+            && DEPOSIT_ELAPSED_BUCKETS.has(timing.in_payload_write_flush)
+            && ((detail.phase === 'remote_payload_write' && timing.in_receipt_read === null)
+              || (detail.phase === 'remote_receipt_read' && DEPOSIT_ELAPSED_BUCKETS.has(timing.in_receipt_read)))));
+        }
       }
       closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
         detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
-          category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }) });
+          category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }),
+        ...(raw.version === 7 ? { append_timing: outcome.append_timing === null ? null
+          : Object.freeze({ before_payload: outcome.append_timing.before_payload,
+            in_payload_write_flush: outcome.append_timing.in_payload_write_flush,
+            in_receipt_read: outcome.append_timing.in_receipt_read }) } : {}) });
     }
     return Object.freeze(closed);
   });
@@ -273,7 +289,7 @@ function depositDiagnostics(raw, fragments, complete) {
   return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
 }
 
-function summary(raw, operation) {
+function summary(raw, operation, appendDiagnosticsV7 = false) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
   check(object(raw) && raw.operation === `private_storage_fragments_${operation}`);
@@ -381,8 +397,9 @@ function summary(raw, operation) {
   }
   if (Object.hasOwn(raw, 'deposit_diagnostics')) {
     check(operation === 'deposit');
-    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete);
+    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete, appendDiagnosticsV7);
   }
+  check(!appendDiagnosticsV7 || (operation === 'deposit' && Object.hasOwn(raw, 'deposit_diagnostics')));
   return Object.freeze(result);
 }
 
@@ -758,6 +775,8 @@ export class CoreStorage {
       if (operation === 'create') await absent(config.stateDirectory);
       else await directory(config.stateDirectory);
       const args = ['--control-socket', config.controlSocket, 'storage', 'fragments', operation, '--state', config.stateDirectory];
+      const appendDiagnosticsV7 = operation === 'deposit' && config.appendDiagnosticsV7 === true;
+      if (appendDiagnosticsV7) args.push('--append-diagnostics-v7');
       if (!['create', 'status'].includes(operation)) await controlSocket(config.controlSocket);
       if (operation !== 'status') {
         retained.push(await privateFile(config.identity, 65536));
@@ -802,7 +821,7 @@ export class CoreStorage {
       let restored = false;
       if (!execution.stopped && !execution.spawnError && execution.signal === null) {
         try {
-          report = summary(JSON.parse(execution.output), operation);
+          report = summary(JSON.parse(execution.output), operation, appendDiagnosticsV7);
           requireThat((execution.code === 0 && report.operation_complete)
             || (execution.code === 1 && !report.operation_complete), 'invalid_core_report');
           status = report.operation_complete ? 'complete' : 'incomplete';
