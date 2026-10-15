@@ -226,6 +226,223 @@ function diagnosticV7(append_timing = null, phase = 'remote_receipt_read', chang
     append_timing }, changes), version: 7 };
 }
 
+const FLOW_PAIRS = {
+  source_port: ['entropy'],
+  retirement_drain: ['unconfirmed', 'io', 'helper_kernel', 'helper_capacity', 'helper_unavailable',
+    'helper_cleanup_incomplete', 'helper_other_rejection', 'helper_timeout', 'helper_io',
+    'helper_validation', 'helper_authority', 'helper_correlation', 'helper_runtime_changed'],
+  material: ['metadata', 'topology'],
+  slot_reservation: ['unconfirmed', 'local_capacity', 'local_unavailable'],
+  helper_acquire: ['helper_kernel', 'helper_capacity', 'helper_unavailable', 'helper_not_found',
+    'helper_cleanup_incomplete', 'helper_other_rejection', 'helper_timeout', 'helper_io',
+    'helper_validation', 'helper_authority', 'helper_correlation', 'helper_runtime_changed'],
+  descriptor_clone: ['io'], descriptor_adoption: ['metadata', 'io'], flow_metadata: ['metadata'],
+};
+function flowDetail(stage = 'helper_acquire', reason = 'helper_capacity', rounds = 1) {
+  return { rounds, first: { stage, reason }, last: { stage, reason } };
+}
+function diagnosticV8(flow_acquire = null, changes = {}) {
+  return { ...diagnosticV6({ stage: 'stream_open', deadline_scope: 'none', tls_failure: null,
+    stream_failure: 'flow_acquire', challenge: null, flow_acquire }, changes), version: 8 };
+}
+
+test('v8 is a mutually exclusive boolean opt-in on the actual deposit argv only', async t => {
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true },
+    process: fakeProcess(async operation => ({ raw: { ...coreReport(operation),
+      ...(operation === 'deposit' ? { deposit_diagnostics: { version: 8, failures: [], omitted_failures: 0 } } : {}) } })) });
+  assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).status, 'complete');
+  assert.deepEqual(fixture.calls[0].args.slice(0, 8), ['--control-socket', fixture.config.controlSocket,
+    'storage', 'fragments', 'deposit', '--state', fixture.config.stateDirectory, '--flow-acquire-diagnostics-v8']);
+  assert.equal(fixture.calls[0].args.filter(value => value === '--flow-acquire-diagnostics-v8').length, 1);
+  assert.equal(fixture.calls[0].args.includes('--append-diagnostics-v7'), false);
+  for (const method of ['status', 'progress', 'delete']) {
+    await fixture.adapter[method]();
+    for (const flag of ['--append-diagnostics-v7', '--flow-acquire-diagnostics-v8']) {
+      assert.equal(fixture.calls.at(-1).args.includes(flag), false);
+    }
+  }
+  for (const value of [null, 'true', 1, 0, [], {}]) {
+    await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, flowAcquireDiagnosticsV8: value }));
+    await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+  }
+  await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, appendDiagnosticsV7: true }));
+  await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+});
+
+test('v8 retains exactly 35 local flow pairs and bounded rounds without changing custody or input', async t => {
+  let current = diagnosticV8();
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const baseline = await fixture.adapter.deposit(request);
+  const journal = join(fixture.config.stateDirectory, 'owner-state');
+  await writeFile(journal, 'PRIVATE-FLOW-CANARY', { mode: 0o600 });
+  const cases = [null, { rounds: 8, first: { stage: 'helper_acquire', reason: 'helper_capacity' },
+    last: { stage: 'slot_reservation', reason: 'local_capacity' } }];
+  let pairs = 0;
+  for (const [stage, reasons] of Object.entries(FLOW_PAIRS)) for (const reason of reasons) {
+    pairs++;
+    for (let rounds = 1; rounds <= 8; rounds++) cases.push(flowDetail(stage, reason, rounds));
+  }
+  assert.equal(pairs, 35);
+  for (const flow of cases) {
+    current = diagnosticV8(flow);
+    const before = JSON.stringify(current);
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(JSON.stringify(result.storage.deposit_diagnostics), before);
+    assert.equal(JSON.stringify(current), before);
+    assert.deepEqual({ ...result, storage: baseline.storage }, baseline);
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    const { deposit_diagnostics: ignored, ...oldAccounting } = baseline.storage;
+    assert.deepEqual(accounting, oldAccounting);
+    const observed = deposit_diagnostics.failures[0].agent_detail.flow_acquire;
+    if (observed) assert.ok(Object.isFrozen(observed) && Object.isFrozen(observed.first) && Object.isFrozen(observed.last));
+    for (const canary of [fixture.root, ...KEYS, 'PRIVATE-FLOW-CANARY']) assert.ok(!JSON.stringify(result).includes(canary));
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.deepEqual(fixture.calls.at(-1).args, fixture.calls[0].args);
+  }
+  assert.equal(await readFile(journal, 'utf8'), 'PRIVATE-FLOW-CANARY');
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
+test('v8 rejects every unreachable flow pair and malformed or private observation', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const reasons = [...new Set(Object.values(FLOW_PAIRS).flat()), 'unobserved', 'PRIVATE-FLOW-CANARY'];
+  const invalid = [];
+  for (const stage of [...Object.keys(FLOW_PAIRS), 'unobserved', 'PRIVATE-FLOW-CANARY']) for (const reason of reasons) {
+    if (FLOW_PAIRS[stage]?.includes(reason)) continue;
+    for (const endpoint of ['first', 'last']) {
+      const flow = flowDetail('helper_acquire', 'helper_capacity', 2);
+      flow[endpoint] = { stage, reason }; invalid.push(diagnosticV8(flow));
+    }
+  }
+  for (const rounds of [0, 9, -1, true, 1.5, null, '1', Number.MAX_SAFE_INTEGER + 1]) {
+    invalid.push(diagnosticV8({ ...flowDetail(), rounds }));
+  }
+  invalid.push(diagnosticV8({ ...flowDetail(), last: { stage: 'source_port', reason: 'entropy' } }));
+  for (const value of ['PRIVATE-FLOW-CANARY', false, 1, [], {}]) invalid.push(diagnosticV8(value));
+  for (const field of ['rounds', 'first', 'last']) {
+    const flow = flowDetail(); delete flow[field]; invalid.push(diagnosticV8(flow));
+  }
+  for (const endpoint of ['first', 'last']) {
+    for (const value of [null, 'PRIVATE-FLOW-CANARY', false, 1, [], {}]) {
+      invalid.push(diagnosticV8({ ...flowDetail(), [endpoint]: value }));
+    }
+    for (const field of ['stage', 'reason']) {
+      const flow = flowDetail(); delete flow[endpoint][field]; invalid.push(diagnosticV8(flow));
+    }
+    const flow = flowDetail(); flow[endpoint].raw = 'PRIVATE-FLOW-CANARY'; invalid.push(diagnosticV8(flow));
+  }
+  invalid.push(diagnosticV8({ ...flowDetail(), elapsed_ms: 10 }));
+  const missing = diagnosticV8(); delete missing.failures[0].agent_detail.flow_acquire; invalid.push(missing);
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-FLOW-CANARY'));
+  }
+});
+
+test('v8 flow detail belongs only to the original unavailable pre-READY flow failure', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const invalid = [];
+  for (const [field, values] of Object.entries({ stage: ['wire_receipt', 'agent_terminal', 'unknown'],
+    category: ['io', 'timeout', 'unknown'], agent_code: [null, 'unknown', 'CONTENT_BUSY', 'CONTENT_INVALID', 'CONTENT_POLICY'] })) {
+    for (const value of values) invalid.push(diagnosticV8(flowDetail(), { [field]: value }));
+  }
+  for (const [field, values] of Object.entries({ stage: ['provider_lookup', 'tls_handshake', 'challenge'],
+    deadline_scope: ['operation', 'exchange'], stream_failure: [null, 'policy', 'transport_tls'],
+    tls_failure: ['io'], challenge: [{ phase: 'challenge_read_verify', before_challenge: 'under_1s', in_challenge: '1_to_5s' }] })) {
+    for (const value of values) {
+      const raw = diagnosticV8(flowDetail()); raw.failures[0].agent_detail[field] = value; invalid.push(raw);
+    }
+  }
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+  }
+});
+
+test('v8 is exact opt-in without downgrade and preserves the separate historical v1-v7 selectors', async t => {
+  const legacy = [undefined, diagnostic(), diagnosticV2(), diagnosticV3(), diagnosticV4(), diagnosticV5(), diagnosticV6()];
+  for (const configChanges of [{}, { flowAcquireDiagnosticsV8: false }, { appendDiagnosticsV7: true },
+    { appendDiagnosticsV7: true, flowAcquireDiagnosticsV8: false }, { flowAcquireDiagnosticsV8: true },
+    { appendDiagnosticsV7: false, flowAcquireDiagnosticsV8: true }]) {
+    let current;
+    const fixture = await setup(t, { configChanges, process: fakeProcess(async () => ({
+      raw: { ...coreReport('deposit', 'uncertain', false),
+        ...(current === undefined ? {} : { deposit_diagnostics: current }) }, code: 1,
+    })) });
+    for (current of [...legacy, diagnosticV7(), diagnosticV8()]) {
+      const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+      const version = configChanges.flowAcquireDiagnosticsV8 ? 8 : configChanges.appendDiagnosticsV7 ? 7 : 0;
+      const accepted = version ? current?.version === version : !current || current.version <= 6;
+      assert.equal(fixture.calls.at(-1).args.includes('--flow-acquire-diagnostics-v8'), version === 8);
+      assert.equal(fixture.calls.at(-1).args.includes('--append-diagnostics-v7'), version === 7);
+      if (accepted) {
+        assert.equal(result.status, 'incomplete');
+        assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+      } else {
+        assert.equal(result.code, 'invalid_core_report'); assert.equal(result.storage, null);
+      }
+    }
+    for (const version of [1, 2, 3, 4, 5, 6, 7]) {
+      current = { ...diagnosticV8(), version };
+      assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).code, 'invalid_core_report');
+    }
+  }
+});
+
+test('v8 retains nullable v7 APPEND outcomes and never substitutes flow facts for completion', async t => {
+  let raw;
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true },
+    process: fakeProcess(async () => ({ raw, code: raw.operation_complete === false ? 1 : 0 })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const cases = [diagnosticV7(), diagnosticV7(null, 'remote_receipt_read', { agent_outcome: null }),
+    diagnosticV7(null, 'remote_receipt_read', { agent_outcome: { status: 'pending', detail: null, append_timing: null } })];
+  for (const bucket of ELAPSED_BUCKETS) {
+    const timing = { before_payload: bucket, in_payload_write_flush: bucket, in_receipt_read: null };
+    cases.push(diagnosticV7(timing, 'remote_payload_write'), diagnosticV7({ ...timing, in_receipt_read: bucket }));
+  }
+  for (const value of cases) {
+    const deposit_diagnostics = { ...value, version: 8 };
+    raw = { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics };
+    assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, deposit_diagnostics);
+  }
+  raw = { ...coreReport('deposit'), deposit_diagnostics: { version: 8, failures: [], omitted_failures: 0 } };
+  assert.equal((await fixture.adapter.deposit(request)).status, 'complete');
+  raw.deposit_diagnostics = diagnosticV8(flowDetail());
+  assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+  raw = { ...coreReport('status'), deposit_diagnostics: { version: 8, failures: [], omitted_failures: 0 } };
+  assert.equal((await fixture.adapter.status()).code, 'invalid_core_report');
+});
+
+test('v8 preserves the eight-failure and charged-copy bounds', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true }, process: fakeProcess(async () => ({
+    raw: { ...repairedReport('deposit', 'pending', 6), deposit_diagnostics: current }, code: 1,
+  })) });
+  const failure = diagnosticV8(flowDetail()).failures[0];
+  const valid = { version: 8, failures: Array.from({ length: 8 }, (_, copy_index) => ({ ...failure, copy_index })), omitted_failures: 4 };
+  current = valid;
+  assert.deepEqual((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).storage.deposit_diagnostics, valid);
+  for (current of [{ ...valid, omitted_failures: 5 }, { ...valid, omitted_failures: 2049 },
+    { ...valid, failures: [...valid.failures, valid.failures[0]] },
+    { ...valid, failures: valid.failures.slice(1) }, { ...valid, failures: [failure, failure], omitted_failures: 0 }]) {
+    assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).code, 'invalid_core_report');
+  }
+});
+
 test('v7 is a strict boolean opt-in and selects only the actual fragment deposit command', async t => {
   const fixture = await setup(t, { configChanges: { appendDiagnosticsV7: true },
     process: fakeProcess(async operation => ({ raw: { ...coreReport(operation),

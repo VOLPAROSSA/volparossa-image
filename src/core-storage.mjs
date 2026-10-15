@@ -28,6 +28,19 @@ const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challe
 const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
 const DEPOSIT_STREAM_FAILURES = new Set(['policy', 'route_state', 'route_material', 'flow_acquire',
   'transport_certificate', 'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment']);
+const FLOW_HELPER_REASONS = ['helper_kernel', 'helper_capacity', 'helper_unavailable', 'helper_not_found',
+  'helper_cleanup_incomplete', 'helper_other_rejection', 'helper_timeout', 'helper_io',
+  'helper_validation', 'helper_authority', 'helper_correlation', 'helper_runtime_changed'];
+const FLOW_BOUNDARIES = new Map([
+  ['source_port', new Set(['entropy'])],
+  ['retirement_drain', new Set(['unconfirmed', 'io', ...FLOW_HELPER_REASONS.filter(reason => reason !== 'helper_not_found')])],
+  ['material', new Set(['metadata', 'topology'])],
+  ['slot_reservation', new Set(['unconfirmed', 'local_capacity', 'local_unavailable'])],
+  ['helper_acquire', new Set(FLOW_HELPER_REASONS)],
+  ['descriptor_clone', new Set(['io'])],
+  ['descriptor_adoption', new Set(['metadata', 'io'])],
+  ['flow_metadata', new Set(['metadata'])],
+]);
 const DEPOSIT_CHALLENGE_PHASES = new Set(['selector_write_flush', 'grant_write_flush', 'challenge_read_verify']);
 const DEPOSIT_ELAPSED_BUCKETS = new Set(['under_1s', '1_to_5s', '5_to_15s', '15_to_30s',
   '30_to_60s', '60_to_90s', '90_to_120s', 'at_least_120s']);
@@ -46,7 +59,8 @@ const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
 const CONFIG_KEYS = ['version', 'coreBinary', 'controlSocket', 'identity', 'passphraseFile',
-  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs', 'appendDiagnosticsV7'];
+  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs',
+  'appendDiagnosticsV7', 'flowAcquireDiagnosticsV8'];
 const CONSTRUCT = Symbol('private constructor');
 
 export class StorageBridgeError extends Error {
@@ -175,18 +189,21 @@ function configuration(raw) {
     && integer(raw.fragmentBytes, 1, 1024 ** 3)
     && integer(raw.lifetimeSeconds, 1, 2678400)
     && (!Object.hasOwn(raw, 'appendDiagnosticsV7') || typeof raw.appendDiagnosticsV7 === 'boolean')
+    && (!Object.hasOwn(raw, 'flowAcquireDiagnosticsV8') || typeof raw.flowAcquireDiagnosticsV8 === 'boolean')
+    && !(raw.appendDiagnosticsV7 === true && raw.flowAcquireDiagnosticsV8 === true)
     && integer(raw.deadlineMs ?? 1800000, 100, 1800000));
   return Object.freeze({ ...raw, providers: Object.freeze(providers), deadlineMs: raw.deadlineMs ?? 1800000 });
 }
 
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
-function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = false) {
+function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false) {
   const check = value => requireThat(value, 'invalid_core_report');
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
   check(exactKeys(raw, ['version', 'failures', 'omitted_failures'])
-    && (appendDiagnosticsV7 ? raw.version === 7 : [1, 2, 3, 4, 5, 6].includes(raw.version))
+    && (flowAcquireDiagnosticsV8 ? raw.version === 8
+      : appendDiagnosticsV7 ? raw.version === 7 : [1, 2, 3, 4, 5, 6].includes(raw.version))
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
     && raw.failures.length + raw.omitted_failures <= retainedCopies
@@ -210,11 +227,13 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
     const closed = { fragment_index, copy_index, operation, stage, category, agent_code };
     if (raw.version !== 1) {
       const detail = failure.agent_detail;
+      let flowAcquire = null;
       if (detail !== null) {
         const detailKeys = ['stage', 'deadline_scope'];
         if (raw.version >= 3) detailKeys.push('tls_failure');
         if (raw.version >= 5) detailKeys.push('stream_failure');
         if (raw.version >= 6) detailKeys.push('challenge');
+        if (raw.version === 8) detailKeys.push('flow_acquire');
         check(exactKeys(detail, detailKeys)
           && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
           && DEPOSIT_AGENT_STAGES.has(detail.stage)
@@ -241,6 +260,22 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
             && detail.stage === 'challenge' && detail.tls_failure === null && detail.stream_failure === null
             && agent_code === 'CONTENT_UNAVAILABLE'));
         }
+        if (raw.version === 8 && detail.flow_acquire !== null) {
+          const flow = detail.flow_acquire;
+          check(exactKeys(flow, ['rounds', 'first', 'last']) && integer(flow.rounds, 1, 8)
+            && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
+            && detail.stream_failure === 'flow_acquire' && detail.tls_failure === null
+            && detail.challenge === null && agent_code === 'CONTENT_UNAVAILABLE');
+          for (const endpoint of [flow.first, flow.last]) {
+            check(exactKeys(endpoint, ['stage', 'reason'])
+              && FLOW_BOUNDARIES.get(endpoint.stage)?.has(endpoint.reason) === true);
+          }
+          check(flow.rounds !== 1 || (flow.first.stage === flow.last.stage && flow.first.reason === flow.last.reason));
+          // Original local loop observations only; no remote capacity or cleanup claim.
+          flowAcquire = Object.freeze({ rounds: flow.rounds,
+            first: Object.freeze({ stage: flow.first.stage, reason: flow.first.reason }),
+            last: Object.freeze({ stage: flow.last.stage, reason: flow.last.reason }) });
+        }
       }
       closed.agent_detail = detail === null ? null
         : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
@@ -248,12 +283,13 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
           ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}),
           ...(raw.version >= 6 ? { challenge: detail.challenge === null ? null
             : Object.freeze({ phase: detail.challenge.phase, before_challenge: detail.challenge.before_challenge,
-              in_challenge: detail.challenge.in_challenge }) } : {}) });
+              in_challenge: detail.challenge.in_challenge }) } : {}),
+          ...(raw.version === 8 ? { flow_acquire: flowAcquire } : {}) });
     }
     if (raw.version >= 4) {
       const outcome = failure.agent_outcome;
       if (outcome !== null) {
-        check(exactKeys(outcome, raw.version === 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
+        check(exactKeys(outcome, raw.version >= 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
           && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
           && DEPOSIT_OUTCOME_STAGES.has(stage));
         const detail = outcome.detail;
@@ -265,7 +301,7 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
             && (detail.deadline_scope !== 'bridge' || DEPOSIT_OUTCOME_PHASES.slice(1, 15).includes(detail.phase))
             && (detail.deadline_scope !== 'remote_wire' || DEPOSIT_OUTCOME_PHASES.slice(6, 13).includes(detail.phase)));
         } else check(detail === null);
-        if (raw.version === 7) {
+        if (raw.version >= 7) {
           const timing = outcome.append_timing;
           check(timing === null || (exactKeys(timing, ['before_payload', 'in_payload_write_flush', 'in_receipt_read'])
             && operation === 'append' && outcome.status === 'observed'
@@ -278,7 +314,7 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
       closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
         detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
           category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }),
-        ...(raw.version === 7 ? { append_timing: outcome.append_timing === null ? null
+        ...(raw.version >= 7 ? { append_timing: outcome.append_timing === null ? null
           : Object.freeze({ before_payload: outcome.append_timing.before_payload,
             in_payload_write_flush: outcome.append_timing.in_payload_write_flush,
             in_receipt_read: outcome.append_timing.in_receipt_read }) } : {}) });
@@ -289,7 +325,7 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
   return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
 }
 
-function summary(raw, operation, appendDiagnosticsV7 = false) {
+function summary(raw, operation, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
   check(object(raw) && raw.operation === `private_storage_fragments_${operation}`);
@@ -397,9 +433,11 @@ function summary(raw, operation, appendDiagnosticsV7 = false) {
   }
   if (Object.hasOwn(raw, 'deposit_diagnostics')) {
     check(operation === 'deposit');
-    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete, appendDiagnosticsV7);
+    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete,
+      appendDiagnosticsV7, flowAcquireDiagnosticsV8);
   }
-  check(!appendDiagnosticsV7 || (operation === 'deposit' && Object.hasOwn(raw, 'deposit_diagnostics')));
+  check(!(appendDiagnosticsV7 || flowAcquireDiagnosticsV8)
+    || (operation === 'deposit' && Object.hasOwn(raw, 'deposit_diagnostics')));
   return Object.freeze(result);
 }
 
@@ -776,7 +814,9 @@ export class CoreStorage {
       else await directory(config.stateDirectory);
       const args = ['--control-socket', config.controlSocket, 'storage', 'fragments', operation, '--state', config.stateDirectory];
       const appendDiagnosticsV7 = operation === 'deposit' && config.appendDiagnosticsV7 === true;
+      const flowAcquireDiagnosticsV8 = operation === 'deposit' && config.flowAcquireDiagnosticsV8 === true;
       if (appendDiagnosticsV7) args.push('--append-diagnostics-v7');
+      if (flowAcquireDiagnosticsV8) args.push('--flow-acquire-diagnostics-v8');
       if (!['create', 'status'].includes(operation)) await controlSocket(config.controlSocket);
       if (operation !== 'status') {
         retained.push(await privateFile(config.identity, 65536));
@@ -821,7 +861,7 @@ export class CoreStorage {
       let restored = false;
       if (!execution.stopped && !execution.spawnError && execution.signal === null) {
         try {
-          report = summary(JSON.parse(execution.output), operation, appendDiagnosticsV7);
+          report = summary(JSON.parse(execution.output), operation, appendDiagnosticsV7, flowAcquireDiagnosticsV8);
           requireThat((execution.code === 0 && report.operation_complete)
             || (execution.code === 1 && !report.operation_complete), 'invalid_core_report');
           status = report.operation_complete ? 'complete' : 'incomplete';
