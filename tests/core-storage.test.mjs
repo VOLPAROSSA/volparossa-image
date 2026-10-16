@@ -246,6 +246,184 @@ function diagnosticV8(flow_acquire = null, changes = {}) {
     stream_failure: 'flow_acquire', challenge: null, flow_acquire }, changes), version: 8 };
 }
 
+function diagnosticV9(tls_close_failure = null) {
+  return { ...diagnosticV4({ status: 'observed', detail: { phase: 'transport_tls_close',
+    category: 'unavailable', deadline_scope: 'none' }, append_timing: null, tls_close_failure },
+  { operation: 'reserve' }), version: 9 };
+}
+
+test('v9 strict opt-in selects exactly one deposit flag and leaves other operations unchanged', async t => {
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true },
+    process: fakeProcess(async operation => ({ raw: { ...coreReport(operation),
+      ...(operation === 'deposit' ? { deposit_diagnostics: { version: 9, failures: [], omitted_failures: 0 } } : {}) } })) });
+  assert.equal((await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true })).status, 'complete');
+  assert.deepEqual(fixture.calls[0].args.slice(0, 8), ['--control-socket', fixture.config.controlSocket,
+    'storage', 'fragments', 'deposit', '--state', fixture.config.stateDirectory, '--tls-close-diagnostics-v9']);
+  assert.equal(fixture.calls[0].args.filter(value => value === '--tls-close-diagnostics-v9').length, 1);
+  for (const flag of ['--append-diagnostics-v7', '--flow-acquire-diagnostics-v8']) {
+    assert.equal(fixture.calls[0].args.includes(flag), false);
+  }
+  for (const method of ['status', 'progress', 'delete']) {
+    await fixture.adapter[method]();
+    assert.equal(fixture.calls.at(-1).args.some(value => value.endsWith('-diagnostics-v9')), false);
+  }
+  for (const value of [null, 'true', 1, 0, [], {}]) {
+    await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, tlsCloseDiagnosticsV9: value }));
+    await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+  }
+  for (const other of ['appendDiagnosticsV7', 'flowAcquireDiagnosticsV8']) {
+    await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, [other]: true }));
+    await assert.rejects(CoreStorage.open(fixture.configPath), { code: 'invalid_configuration' });
+  }
+});
+
+test('v9 keeps all four closed TLS-close reasons without changing result, accounting or custody', async t => {
+  let current = diagnosticV9();
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  const baseline = await fixture.adapter.deposit(request);
+  for (const reason of [null, 'shutdown_io', 'read_io', 'trailing_data', 'internal_deadline']) {
+    current = diagnosticV9(reason);
+    const result = await fixture.adapter.deposit(request);
+    assert.equal(result.status, 'incomplete');
+    assert.equal(result.code, 'retained_operation_incomplete');
+    assert.deepEqual(result.storage.deposit_diagnostics, current);
+    assert.equal(JSON.stringify(result.storage.deposit_diagnostics), JSON.stringify(current));
+    assert.ok(Object.isFrozen(result.storage.deposit_diagnostics.failures[0].agent_outcome));
+    assert.deepEqual({ ...result, storage: baseline.storage }, baseline);
+    const { deposit_diagnostics, ...accounting } = result.storage;
+    const { deposit_diagnostics: ignored, ...expectedAccounting } = baseline.storage;
+    assert.deepEqual(accounting, expectedAccounting);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.deepEqual(await readFile(fixture.input), CONTENT);
+    for (const secret of [fixture.root, ...KEYS]) assert.ok(!JSON.stringify(result).includes(secret));
+  }
+});
+
+test('v9 nullable outcomes remain unknown and do not invent a TLS-close failure', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const outcomes = [null, ...['missing', 'pending', 'expired', 'query_failed', 'query_timeout'].map(status => ({
+    status, detail: null, append_timing: null, tls_close_failure: null,
+  })), { status: 'observed', detail: { phase: 'provider_tls_close', category: 'io', deadline_scope: 'none' },
+    append_timing: null, tls_close_failure: null }];
+  for (const outcome of outcomes) {
+    current = diagnosticV9(); current.failures[0].agent_outcome = outcome;
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.deepEqual(result.storage.deposit_diagnostics, current);
+  }
+});
+
+test('v9 rejects missing, private, unknown and wrongly scoped close outcomes and schema downgrade', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), ...(current === undefined ? {} : { deposit_diagnostics: current }) }, code: 1,
+  })) });
+  const invalid = [undefined, diagnostic(), diagnosticV7(), diagnosticV8()];
+  for (const reason of ['PRIVATE-CLOSE-CANARY', 'unspecified', '', true, 1, {}, []]) invalid.push(diagnosticV9(reason));
+  for (const field of ['tls_close_failure', 'append_timing']) {
+    const value = diagnosticV9(); delete value.failures[0].agent_outcome[field]; invalid.push(value);
+  }
+  for (const [field, value] of [['phase', 'provider_tls_close'], ['phase', 'remote_receipt_read'],
+    ['category', 'io'], ['category', 'cancelled'], ['category', 'timeout'], ['deadline_scope', 'operation']]) {
+    const bad = diagnosticV9('shutdown_io'); bad.failures[0].agent_outcome.detail[field] = value; invalid.push(bad);
+  }
+  for (const status of ['missing', 'pending', 'expired', 'query_failed', 'query_timeout']) {
+    const bad = diagnosticV9('shutdown_io'); Object.assign(bad.failures[0].agent_outcome, { status, detail: null }); invalid.push(bad);
+  }
+  const raw = diagnosticV9(); raw.failures[0].agent_outcome.raw = 'PRIVATE-CLOSE-CANARY'; invalid.push(raw);
+  const timing = diagnosticV9('read_io'); timing.failures[0].agent_outcome.append_timing = {
+    before_payload: 'under_1s', in_payload_write_flush: 'under_1s', in_receipt_read: 'under_1s',
+  }; invalid.push(timing);
+  for (const version of [0, 8, 10, '9', true]) invalid.push({ ...diagnosticV9(), version });
+  for (current of invalid) {
+    const result = await fixture.adapter.deposit({ input: fixture.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report', JSON.stringify(current));
+    assert.equal(result.storage, null);
+    assert.equal(result.local_process_joined, true);
+    assert.equal(result.remote_cleanup_confirmed, false);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-CLOSE-CANARY'));
+  }
+});
+
+test('v9 preserves all 35 flow pairs and APPEND timing constraints', async t => {
+  let current;
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const request = { input: fixture.input, alreadyEncrypted: true };
+  let count = 0;
+  for (const [stage, reasons] of Object.entries(FLOW_PAIRS)) for (const reason of reasons) {
+    count++;
+    current = { ...diagnosticV8(flowDetail(stage, reason, 8)), version: 9 };
+    assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, current);
+  }
+  assert.equal(count, 35);
+  const timing = { before_payload: 'under_1s', in_payload_write_flush: '1_to_5s', in_receipt_read: '90_to_120s' };
+  current = { ...diagnosticV7(timing), version: 9 };
+  current.failures[0].agent_outcome.tls_close_failure = null;
+  assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, current);
+  const invalidTiming = structuredClone(current); invalidTiming.failures[0].agent_outcome.append_timing.in_receipt_read = 'PRIVATE-CLOSE-CANARY';
+  const invalid = [invalidTiming, { ...diagnosticV8(flowDetail('retirement_drain', 'helper_not_found')), version: 9 },
+    { ...diagnosticV8({ ...flowDetail(), last: { stage: 'source_port', reason: 'entropy' } }), version: 9 }];
+  for (const rounds of [0, 9, true, '1']) invalid.push({ ...diagnosticV8({ ...flowDetail(), rounds }), version: 9 });
+  const missingFlow = { ...diagnosticV8(), version: 9 }; delete missingFlow.failures[0].agent_detail.flow_acquire; invalid.push(missingFlow);
+  for (current of invalid) assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+});
+
+test('v9 false/default is absent from argv and leaves v1 through v8 schemas exact', async t => {
+  const cases = [diagnostic(), diagnosticV2(), diagnosticV3(), diagnosticV4(), diagnosticV5(), diagnosticV6(),
+    diagnosticV7(), diagnosticV8()];
+  for (const diagnostics of cases) {
+    const configChanges = { tlsCloseDiagnosticsV9: false,
+      ...(diagnostics.version === 7 ? { appendDiagnosticsV7: true } : {}),
+      ...(diagnostics.version === 8 ? { flowAcquireDiagnosticsV8: true } : {}) };
+    let current = diagnostics;
+    const fixture = await setup(t, { configChanges, process: fakeProcess(async () => ({
+      raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+    })) });
+    const request = { input: fixture.input, alreadyEncrypted: true };
+    assert.deepEqual((await fixture.adapter.deposit(request)).storage.deposit_diagnostics, diagnostics);
+    assert.equal(fixture.calls.at(-1).args.includes('--tls-close-diagnostics-v9'), false);
+    current = diagnosticV9();
+    assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+    if (diagnostics.version >= 4) {
+      current = { ...diagnosticV9(), version: diagnostics.version };
+      assert.equal((await fixture.adapter.deposit(request)).code, 'invalid_core_report');
+    }
+  }
+  const ordinary = await setup(t);
+  await ordinary.adapter.deposit({ input: ordinary.input, alreadyEncrypted: true });
+  assert.equal(ordinary.calls[0].args.includes('--tls-close-diagnostics-v9'), false);
+});
+
+test('snapshot script forwards the private v9 configuration through the default adapter and real child', async t => {
+  const fixture = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true } });
+  const diagnostics = diagnosticV9('read_io');
+  const binary = join(fixture.root, 'synthetic-core');
+  await writeFile(binary, `#!${process.execPath}\nif (process.argv[6] !== 'deposit'
+    || process.argv[9] !== '--tls-close-diagnostics-v9'
+    || process.argv.filter(value => value === '--tls-close-diagnostics-v9').length !== 1
+    || process.argv.includes('--append-diagnostics-v7') || process.argv.includes('--flow-acquire-diagnostics-v8')) process.exit(17);
+process.stdout.write(${JSON.stringify(JSON.stringify({ ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: diagnostics }))});
+process.exitCode = 1;\n`, { mode: 0o700 });
+  await writeFile(fixture.configPath, JSON.stringify({ ...fixture.config, coreBinary: binary }));
+  await writeFile(join(fixture.root, 'receipt.json'), JSON.stringify({ version: 1, kind: 'volparossa-immich-snapshot',
+    cipher_file: 'snapshot.pgp', cipher_sha256: SHA, cipher_bytes: CONTENT.length, encryption: 'OpenPGP-AES256',
+    source_consistency: 'operator-asserted-quiesced-copy' }), { mode: 0o600 });
+  const result = await runSnapshotStorage({ operation: 'deposit', config: fixture.configPath, bundle: fixture.root });
+  assert.equal(result.status, 'incomplete');
+  assert.deepEqual(result.storage.deposit_diagnostics, diagnostics);
+  assert.equal(result.local_process_joined, true);
+  assert.equal(result.remote_cleanup_confirmed, false);
+  assert.deepEqual(await readFile(fixture.input), CONTENT);
+});
+
 test('v8 is a mutually exclusive boolean opt-in on the actual deposit argv only', async t => {
   const fixture = await setup(t, { configChanges: { flowAcquireDiagnosticsV8: true },
     process: fakeProcess(async operation => ({ raw: { ...coreReport(operation),

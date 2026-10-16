@@ -55,12 +55,13 @@ const DEPOSIT_OUTCOME_CATEGORIES = new Set(['io', 'auth', 'invalid', 'busy', 'st
   'timeout', 'policy', 'unavailable', 'cancelled']);
 const DEPOSIT_OUTCOME_STAGES = new Set(['wire_receipt', 'agent_terminal', 'deadline']);
 const DEPOSIT_OUTCOME_DEADLINES = new Set(['none', 'operation', 'exchange', 'bridge', 'remote_wire']);
+const DEPOSIT_TLS_CLOSE_FAILURES = new Set(['shutdown_io', 'read_io', 'trailing_data', 'internal_deadline']);
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
 const CONFIG_KEYS = ['version', 'coreBinary', 'controlSocket', 'identity', 'passphraseFile',
   'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs',
-  'appendDiagnosticsV7', 'flowAcquireDiagnosticsV8'];
+  'appendDiagnosticsV7', 'flowAcquireDiagnosticsV8', 'tlsCloseDiagnosticsV9'];
 const CONSTRUCT = Symbol('private constructor');
 
 export class StorageBridgeError extends Error {
@@ -190,19 +191,23 @@ function configuration(raw) {
     && integer(raw.lifetimeSeconds, 1, 2678400)
     && (!Object.hasOwn(raw, 'appendDiagnosticsV7') || typeof raw.appendDiagnosticsV7 === 'boolean')
     && (!Object.hasOwn(raw, 'flowAcquireDiagnosticsV8') || typeof raw.flowAcquireDiagnosticsV8 === 'boolean')
+    && (!Object.hasOwn(raw, 'tlsCloseDiagnosticsV9') || typeof raw.tlsCloseDiagnosticsV9 === 'boolean')
     && !(raw.appendDiagnosticsV7 === true && raw.flowAcquireDiagnosticsV8 === true)
+    && !(raw.tlsCloseDiagnosticsV9 === true
+      && (raw.appendDiagnosticsV7 === true || raw.flowAcquireDiagnosticsV8 === true))
     && integer(raw.deadlineMs ?? 1800000, 100, 1800000));
   return Object.freeze({ ...raw, providers: Object.freeze(providers), deadlineMs: raw.deadlineMs ?? 1800000 });
 }
 
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
-function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false) {
+function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false,
+  tlsCloseDiagnosticsV9 = false) {
   const check = value => requireThat(value, 'invalid_core_report');
   const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
     && keys.every(key => Object.hasOwn(value, key));
   const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
   check(exactKeys(raw, ['version', 'failures', 'omitted_failures'])
-    && (flowAcquireDiagnosticsV8 ? raw.version === 8
+    && (tlsCloseDiagnosticsV9 ? raw.version === 9 : flowAcquireDiagnosticsV8 ? raw.version === 8
       : appendDiagnosticsV7 ? raw.version === 7 : [1, 2, 3, 4, 5, 6].includes(raw.version))
     && Array.isArray(raw.failures) && raw.failures.length <= 8
     && integer(raw.omitted_failures, 0, 2048)
@@ -233,7 +238,7 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
         if (raw.version >= 3) detailKeys.push('tls_failure');
         if (raw.version >= 5) detailKeys.push('stream_failure');
         if (raw.version >= 6) detailKeys.push('challenge');
-        if (raw.version === 8) detailKeys.push('flow_acquire');
+        if (raw.version >= 8) detailKeys.push('flow_acquire');
         check(exactKeys(detail, detailKeys)
           && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
           && DEPOSIT_AGENT_STAGES.has(detail.stage)
@@ -260,7 +265,7 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
             && detail.stage === 'challenge' && detail.tls_failure === null && detail.stream_failure === null
             && agent_code === 'CONTENT_UNAVAILABLE'));
         }
-        if (raw.version === 8 && detail.flow_acquire !== null) {
+        if (raw.version >= 8 && detail.flow_acquire !== null) {
           const flow = detail.flow_acquire;
           check(exactKeys(flow, ['rounds', 'first', 'last']) && integer(flow.rounds, 1, 8)
             && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
@@ -284,12 +289,13 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
           ...(raw.version >= 6 ? { challenge: detail.challenge === null ? null
             : Object.freeze({ phase: detail.challenge.phase, before_challenge: detail.challenge.before_challenge,
               in_challenge: detail.challenge.in_challenge }) } : {}),
-          ...(raw.version === 8 ? { flow_acquire: flowAcquire } : {}) });
+          ...(raw.version >= 8 ? { flow_acquire: flowAcquire } : {}) });
     }
     if (raw.version >= 4) {
       const outcome = failure.agent_outcome;
       if (outcome !== null) {
-        check(exactKeys(outcome, raw.version >= 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
+        check(exactKeys(outcome, raw.version === 9 ? ['status', 'detail', 'append_timing', 'tls_close_failure']
+          : raw.version >= 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
           && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
           && DEPOSIT_OUTCOME_STAGES.has(stage));
         const detail = outcome.detail;
@@ -310,6 +316,12 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
             && ((detail.phase === 'remote_payload_write' && timing.in_receipt_read === null)
               || (detail.phase === 'remote_receipt_read' && DEPOSIT_ELAPSED_BUCKETS.has(timing.in_receipt_read)))));
         }
+        if (raw.version === 9) {
+          check(outcome.tls_close_failure === null || (DEPOSIT_TLS_CLOSE_FAILURES.has(outcome.tls_close_failure)
+            && outcome.status === 'observed' && detail.phase === 'transport_tls_close'
+            && detail.category === 'unavailable' && detail.deadline_scope === 'none'
+            && outcome.append_timing === null));
+        }
       }
       closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
         detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
@@ -317,7 +329,8 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
         ...(raw.version >= 7 ? { append_timing: outcome.append_timing === null ? null
           : Object.freeze({ before_payload: outcome.append_timing.before_payload,
             in_payload_write_flush: outcome.append_timing.in_payload_write_flush,
-            in_receipt_read: outcome.append_timing.in_receipt_read }) } : {}) });
+            in_receipt_read: outcome.append_timing.in_receipt_read }) } : {}),
+        ...(raw.version === 9 ? { tls_close_failure: outcome.tls_close_failure } : {}) });
     }
     return Object.freeze(closed);
   });
@@ -325,7 +338,8 @@ function depositDiagnostics(raw, fragments, complete, appendDiagnosticsV7 = fals
   return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
 }
 
-function summary(raw, operation, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false) {
+function summary(raw, operation, appendDiagnosticsV7 = false, flowAcquireDiagnosticsV8 = false,
+  tlsCloseDiagnosticsV9 = false) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
   check(object(raw) && raw.operation === `private_storage_fragments_${operation}`);
@@ -434,9 +448,9 @@ function summary(raw, operation, appendDiagnosticsV7 = false, flowAcquireDiagnos
   if (Object.hasOwn(raw, 'deposit_diagnostics')) {
     check(operation === 'deposit');
     result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete,
-      appendDiagnosticsV7, flowAcquireDiagnosticsV8);
+      appendDiagnosticsV7, flowAcquireDiagnosticsV8, tlsCloseDiagnosticsV9);
   }
-  check(!(appendDiagnosticsV7 || flowAcquireDiagnosticsV8)
+  check(!(appendDiagnosticsV7 || flowAcquireDiagnosticsV8 || tlsCloseDiagnosticsV9)
     || (operation === 'deposit' && Object.hasOwn(raw, 'deposit_diagnostics')));
   return Object.freeze(result);
 }
@@ -815,8 +829,10 @@ export class CoreStorage {
       const args = ['--control-socket', config.controlSocket, 'storage', 'fragments', operation, '--state', config.stateDirectory];
       const appendDiagnosticsV7 = operation === 'deposit' && config.appendDiagnosticsV7 === true;
       const flowAcquireDiagnosticsV8 = operation === 'deposit' && config.flowAcquireDiagnosticsV8 === true;
+      const tlsCloseDiagnosticsV9 = operation === 'deposit' && config.tlsCloseDiagnosticsV9 === true;
       if (appendDiagnosticsV7) args.push('--append-diagnostics-v7');
       if (flowAcquireDiagnosticsV8) args.push('--flow-acquire-diagnostics-v8');
+      if (tlsCloseDiagnosticsV9) args.push('--tls-close-diagnostics-v9');
       if (!['create', 'status'].includes(operation)) await controlSocket(config.controlSocket);
       if (operation !== 'status') {
         retained.push(await privateFile(config.identity, 65536));
@@ -861,7 +877,8 @@ export class CoreStorage {
       let restored = false;
       if (!execution.stopped && !execution.spawnError && execution.signal === null) {
         try {
-          report = summary(JSON.parse(execution.output), operation, appendDiagnosticsV7, flowAcquireDiagnosticsV8);
+          report = summary(JSON.parse(execution.output), operation, appendDiagnosticsV7, flowAcquireDiagnosticsV8,
+            tlsCloseDiagnosticsV9);
           requireThat((execution.code === 0 && report.operation_complete)
             || (execution.code === 1 && !report.operation_complete), 'invalid_core_report');
           status = report.operation_complete ? 'complete' : 'incomplete';
