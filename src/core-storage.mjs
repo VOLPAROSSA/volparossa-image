@@ -14,11 +14,57 @@ const REPAIR_FIELDS = ['placement_authorizations', 'retained_copy_records', 'pen
   'desired_copies_per_fragment', 'replacement_overhead_included'];
 const HASH = /^[a-f0-9]{64}$/;
 const OPERATIONS = new Set(['create', 'deposit', 'status', 'progress', 'restore', 'renew', 'delete']);
+const DEPOSIT_OPERATIONS = new Set(['prepare', 'reserve', 'progress', 'append', 'finalize', 'renew', 'read_range', 'delete']);
+const DEPOSIT_STAGES = new Set(['journal_open', 'authorization', 'agent_ready', 'challenge', 'signed_request',
+  'wire_receipt', 'agent_terminal', 'accounting', 'local_input', 'receipt_validation', 'journal_save', 'deadline', 'unknown']);
+const DEPOSIT_CATEGORIES = new Set(['io', 'timeout', 'protocol', 'agent_rejected', 'invalid', 'busy', 'store', 'unknown']);
+const DEPOSIT_AGENT_CODES = new Set(['CONTENT_INVALID', 'CONTENT_UNAVAILABLE', 'CONTENT_BUSY', 'CONTENT_POLICY', 'unknown']);
+const DEPOSIT_AGENT_STAGES = new Set(['unobserved', 'route_connect', 'control_selection', 'provider_lookup',
+  'provider_cardinality', 'offer_validity', 'stream_open', 'tls_handshake', 'challenge']);
+const DEPOSIT_EXCHANGE_STAGES = new Set(['stream_open', 'tls_handshake', 'challenge']);
+const DEPOSIT_TLS_FAILURES = new Set(['offer', 'configuration', 'handshake_deadline', 'authentication', 'tls_other', 'io']);
+const DEPOSIT_STREAM_FAILURES = new Set(['policy', 'route_state', 'route_material', 'flow_acquire',
+  'transport_certificate', 'transport_tls', 'initial_paths', 'open_tcp_write', 'subflow_readiness', 'stream_attachment']);
+const FLOW_HELPER_REASONS = ['helper_kernel', 'helper_capacity', 'helper_unavailable', 'helper_not_found',
+  'helper_cleanup_incomplete', 'helper_other_rejection', 'helper_timeout', 'helper_io',
+  'helper_validation', 'helper_authority', 'helper_correlation', 'helper_runtime_changed'];
+const FLOW_BOUNDARIES = new Map([
+  ['source_port', new Set(['entropy'])],
+  ['retirement_drain', new Set(['unconfirmed', 'io', ...FLOW_HELPER_REASONS.filter(reason => reason !== 'helper_not_found')])],
+  ['material', new Set(['metadata', 'topology'])],
+  ['slot_reservation', new Set(['unconfirmed', 'local_capacity', 'local_unavailable'])],
+  ['helper_acquire', new Set(FLOW_HELPER_REASONS)],
+  ['descriptor_clone', new Set(['io'])],
+  ['descriptor_adoption', new Set(['metadata', 'io'])],
+  ['flow_metadata', new Set(['metadata'])],
+]);
+const DEPOSIT_CHALLENGE_PHASES = new Set(['selector_write_flush', 'grant_write_flush', 'challenge_read_verify']);
+const DEPOSIT_ELAPSED_BUCKETS = new Set(['under_1s', '1_to_5s', '5_to_15s', '15_to_30s',
+  '30_to_60s', '60_to_90s', '90_to_120s', 'at_least_120s']);
+const DEPOSIT_OUTCOME_STATUSES = new Set(['observed', 'missing', 'pending', 'expired', 'query_failed', 'query_timeout']);
+// Ordered like the core's nonzero PrivateStorageOutcomePhase discriminants (1..21).
+const DEPOSIT_OUTCOME_PHASES = ['ready_write', 'local_request_read', 'local_request_verify',
+  'local_payload_read', 'local_payload_verify', 'admission', 'remote_request_verify', 'remote_request_write',
+  'remote_payload_write', 'remote_receipt_read', 'remote_receipt_verify', 'remote_payload_read',
+  'remote_payload_verify', 'local_receipt_write', 'local_payload_write', 'provider_tls_close',
+  'transport_tls_close', 'final_route_check', 'final_grant_check', 'final_lifetime_check', 'terminal_write'];
+const DEPOSIT_OUTCOME_CATEGORIES = new Set(['io', 'auth', 'invalid', 'busy', 'store', 'expired', 'entropy',
+  'timeout', 'policy', 'unavailable', 'cancelled']);
+const DEPOSIT_OUTCOME_STAGES = new Set(['wire_receipt', 'agent_terminal', 'deadline']);
+const DEPOSIT_OUTCOME_DEADLINES = new Set(['none', 'operation', 'exchange', 'bridge', 'remote_wire']);
+const DEPOSIT_TLS_CLOSE_FAILURES = new Set(['shutdown_io', 'read_io', 'trailing_data', 'internal_deadline']);
+const DIAGNOSTIC_SELECTORS = [
+  ['appendDiagnosticsV7', '--append-diagnostics-v7', 7],
+  ['flowAcquireDiagnosticsV8', '--flow-acquire-diagnostics-v8', 8],
+  ['tlsCloseDiagnosticsV9', '--tls-close-diagnostics-v9', 9],
+  ['challengeReadDiagnosticsV10', '--challenge-read-diagnostics-v10', 10],
+];
 const FALSE_FLAGS = ['metadata_overhead_measured', 'current_remote_availability_proven',
   'independent_failure_domains_proven', 'network_contribution_credit', 'automatic_repair',
   'automatic_handoff', 'read_consumes_archive', 'erasure_coding'];
 const CONFIG_KEYS = ['version', 'coreBinary', 'controlSocket', 'identity', 'passphraseFile',
-  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs'];
+  'stateDirectory', 'providers', 'copies', 'fragmentBytes', 'lifetimeSeconds', 'deadlineMs',
+  ...DIAGNOSTIC_SELECTORS.map(([key]) => key)];
 const CONSTRUCT = Symbol('private constructor');
 
 export class StorageBridgeError extends Error {
@@ -103,12 +149,164 @@ function configuration(raw) {
     && (!Object.hasOwn(raw, 'copies') || raw.copies === CORE_CREATE_COPIES)
     && integer(raw.fragmentBytes, 1, 1024 ** 3)
     && integer(raw.lifetimeSeconds, 1, 2678400)
-    && integer(raw.deadlineMs ?? 1800000, 100, 1800000));
+    && integer(raw.deadlineMs ?? 1800000, 100, 1800000)
+    && DIAGNOSTIC_SELECTORS.every(([key]) => !Object.hasOwn(raw, key) || typeof raw[key] === 'boolean')
+    && DIAGNOSTIC_SELECTORS.filter(([key]) => raw[key] === true).length <= 1);
   return Object.freeze({ ...raw, providers: Object.freeze(providers), deadlineMs: raw.deadlineMs ?? 1800000 });
 }
 
+function challengeRead(value, phase, check) {
+  if (value === null) return null;
+  check(object(value) && Object.keys(value).length === 2
+    && Object.hasOwn(value, 'step') && Object.hasOwn(value, 'returned_outcome')
+    && phase === 'challenge_read_verify' && ['length_read', 'body_read', 'verification'].includes(value.step));
+  const allowed = { length_read: ['io_eof', 'io_other', 'invalid', 'wire_timeout'],
+    body_read: ['io_eof', 'io_other', 'wire_timeout'], verification: ['invalid', 'verification_rejected'] };
+  check(value.returned_outcome === null || allowed[value.step].includes(value.returned_outcome));
+  return Object.freeze({ step: value.step, returned_outcome: value.returned_outcome });
+}
+
 // Raw CLI output stays private. Validate the accounting structure before publishing a closed summary.
-function summary(raw, operation) {
+function depositDiagnostics(raw, fragments, complete, selectedVersion) {
+  const check = value => requireThat(value, 'invalid_core_report');
+  const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length
+    && keys.every(key => Object.hasOwn(value, key));
+  const retainedCopies = fragments.reduce((sum, fragment) => sum + fragment.copies.length, 0);
+  check(exactKeys(raw, ['version', 'failures', 'omitted_failures'])
+    && [7, 8, 9, 10].includes(selectedVersion) && raw.version === selectedVersion
+    && Array.isArray(raw.failures) && raw.failures.length <= 8
+    && integer(raw.omitted_failures, 0, 2048)
+    && raw.failures.length + raw.omitted_failures <= retainedCopies
+    && (raw.omitted_failures === 0 || raw.failures.length === 8)
+    && (!complete || (raw.failures.length === 0 && raw.omitted_failures === 0)));
+  const seen = new Set();
+  const failures = raw.failures.map(failure => {
+    const keys = ['fragment_index', 'copy_index', 'operation', 'stage', 'category', 'agent_code'];
+    if (raw.version !== 1) keys.push('agent_detail');
+    if (raw.version >= 4) keys.push('agent_outcome');
+    check(exactKeys(failure, keys));
+    const { fragment_index, copy_index, operation, stage, category, agent_code } = failure;
+    // This bridge consumes fragment reports, never the replica-only null index.
+    check(integer(fragment_index, 0, fragments.length - 1)
+      && integer(copy_index, 0, fragments[fragment_index].copies.length - 1)
+      && DEPOSIT_OPERATIONS.has(operation) && DEPOSIT_STAGES.has(stage) && DEPOSIT_CATEGORIES.has(category)
+      && (category === 'agent_rejected' ? DEPOSIT_AGENT_CODES.has(agent_code) : agent_code === null));
+    const copy = `${fragment_index}:${copy_index}`;
+    check(!seen.has(copy));
+    seen.add(copy);
+    const closed = { fragment_index, copy_index, operation, stage, category, agent_code };
+    if (raw.version !== 1) {
+      const detail = failure.agent_detail;
+      let flowAcquire = null, challengeReadDetail = null;
+      if (detail !== null) {
+        const detailKeys = ['stage', 'deadline_scope'];
+        if (raw.version >= 3) detailKeys.push('tls_failure');
+        if (raw.version >= 5) detailKeys.push('stream_failure');
+        if (raw.version >= 6) detailKeys.push('challenge');
+        if (raw.version >= 8) detailKeys.push('flow_acquire');
+        check(exactKeys(detail, detailKeys)
+          && stage === 'agent_ready' && category === 'agent_rejected' && agent_code !== 'unknown'
+          && DEPOSIT_AGENT_STAGES.has(detail.stage)
+          && ['none', 'operation', 'exchange'].includes(detail.deadline_scope)
+          && (detail.stage !== 'unobserved' || detail.deadline_scope === 'operation')
+          && (detail.deadline_scope !== 'exchange' || DEPOSIT_EXCHANGE_STAGES.has(detail.stage))
+          && (detail.deadline_scope === 'none' || agent_code === 'CONTENT_UNAVAILABLE'));
+        if (raw.version >= 3) {
+          check(detail.tls_failure === null || (DEPOSIT_TLS_FAILURES.has(detail.tls_failure)
+            && detail.stage === 'tls_handshake' && detail.deadline_scope === 'none'
+            && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
+        if (raw.version >= 5) {
+          check(detail.stream_failure === null || (DEPOSIT_STREAM_FAILURES.has(detail.stream_failure)
+            && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
+            && detail.tls_failure === null && agent_code === 'CONTENT_UNAVAILABLE'));
+        }
+        if (raw.version >= 6) {
+          const challenge = detail.challenge;
+          check(challenge === null || (exactKeys(challenge, ['phase', 'before_challenge', 'in_challenge', ...(raw.version === 10 ? ['read'] : [])])
+            && DEPOSIT_CHALLENGE_PHASES.has(challenge.phase)
+            && DEPOSIT_ELAPSED_BUCKETS.has(challenge.before_challenge)
+            && DEPOSIT_ELAPSED_BUCKETS.has(challenge.in_challenge)
+            && detail.stage === 'challenge' && detail.tls_failure === null && detail.stream_failure === null
+            && agent_code === 'CONTENT_UNAVAILABLE'));
+          if (raw.version === 10 && challenge !== null) challengeReadDetail = challengeRead(challenge.read, challenge.phase, check);
+        }
+        if (raw.version >= 8 && detail.flow_acquire !== null) {
+          const flow = detail.flow_acquire;
+          check(exactKeys(flow, ['rounds', 'first', 'last']) && integer(flow.rounds, 1, 8)
+            && detail.stage === 'stream_open' && detail.deadline_scope === 'none'
+            && detail.stream_failure === 'flow_acquire' && detail.tls_failure === null
+            && detail.challenge === null && agent_code === 'CONTENT_UNAVAILABLE');
+          for (const endpoint of [flow.first, flow.last]) {
+            check(exactKeys(endpoint, ['stage', 'reason'])
+              && FLOW_BOUNDARIES.get(endpoint.stage)?.has(endpoint.reason) === true);
+          }
+          check(flow.rounds !== 1 || (flow.first.stage === flow.last.stage && flow.first.reason === flow.last.reason));
+          // Original local loop observations only; no remote capacity or cleanup claim.
+          flowAcquire = Object.freeze({ rounds: flow.rounds,
+            first: Object.freeze({ stage: flow.first.stage, reason: flow.first.reason }),
+            last: Object.freeze({ stage: flow.last.stage, reason: flow.last.reason }) });
+        }
+      }
+      closed.agent_detail = detail === null ? null
+        : Object.freeze({ stage: detail.stage, deadline_scope: detail.deadline_scope,
+          ...(raw.version >= 3 ? { tls_failure: detail.tls_failure } : {}),
+          ...(raw.version >= 5 ? { stream_failure: detail.stream_failure } : {}),
+          ...(raw.version >= 6 ? { challenge: detail.challenge === null ? null
+            : Object.freeze({ phase: detail.challenge.phase, before_challenge: detail.challenge.before_challenge,
+              in_challenge: detail.challenge.in_challenge,
+              ...(raw.version === 10 ? { read: challengeReadDetail } : {}) }) } : {}),
+          ...(raw.version >= 8 ? { flow_acquire: flowAcquire } : {}) });
+    }
+    if (raw.version >= 4) {
+      const outcome = failure.agent_outcome;
+      if (outcome !== null) {
+        check(exactKeys(outcome, raw.version >= 9 ? ['status', 'detail', 'append_timing', 'tls_close_failure']
+          : raw.version >= 7 ? ['status', 'detail', 'append_timing'] : ['status', 'detail'])
+          && DEPOSIT_OUTCOME_STATUSES.has(outcome.status)
+          && DEPOSIT_OUTCOME_STAGES.has(stage));
+        const detail = outcome.detail;
+        if (outcome.status === 'observed') {
+          check(exactKeys(detail, ['phase', 'category', 'deadline_scope'])
+            && DEPOSIT_OUTCOME_PHASES.includes(detail.phase) && DEPOSIT_OUTCOME_CATEGORIES.has(detail.category)
+            && DEPOSIT_OUTCOME_DEADLINES.has(detail.deadline_scope)
+            && (detail.category === 'timeout') === (detail.deadline_scope !== 'none')
+            && (detail.deadline_scope !== 'bridge' || DEPOSIT_OUTCOME_PHASES.slice(1, 15).includes(detail.phase))
+            && (detail.deadline_scope !== 'remote_wire' || DEPOSIT_OUTCOME_PHASES.slice(6, 13).includes(detail.phase)));
+        } else check(detail === null);
+        if (raw.version >= 7) {
+          const timing = outcome.append_timing;
+          check(timing === null || (exactKeys(timing, ['before_payload', 'in_payload_write_flush', 'in_receipt_read'])
+            && operation === 'append' && outcome.status === 'observed'
+            && DEPOSIT_ELAPSED_BUCKETS.has(timing.before_payload)
+            && DEPOSIT_ELAPSED_BUCKETS.has(timing.in_payload_write_flush)
+            && ((detail.phase === 'remote_payload_write' && timing.in_receipt_read === null)
+              || (detail.phase === 'remote_receipt_read' && DEPOSIT_ELAPSED_BUCKETS.has(timing.in_receipt_read)))));
+        }
+        if (raw.version >= 9) {
+          check(outcome.tls_close_failure === null || (DEPOSIT_TLS_CLOSE_FAILURES.has(outcome.tls_close_failure)
+            && outcome.status === 'observed' && detail.phase === 'transport_tls_close'
+            && detail.category === 'unavailable' && detail.deadline_scope === 'none'
+            && outcome.append_timing === null));
+        }
+      }
+      closed.agent_outcome = outcome === null ? null : Object.freeze({ status: outcome.status,
+        detail: outcome.detail === null ? null : Object.freeze({ phase: outcome.detail.phase,
+          category: outcome.detail.category, deadline_scope: outcome.detail.deadline_scope }),
+        ...(raw.version >= 7 ? { append_timing: outcome.append_timing === null ? null
+          : Object.freeze({ before_payload: outcome.append_timing.before_payload,
+            in_payload_write_flush: outcome.append_timing.in_payload_write_flush,
+            in_receipt_read: outcome.append_timing.in_receipt_read }) } : {}),
+        ...(raw.version >= 9 ? { tls_close_failure: outcome.tls_close_failure } : {}) });
+    }
+    return Object.freeze(closed);
+  });
+  // Diagnostic evidence does not alter completion, accounting, retry or cleanup.
+  return Object.freeze({ version: raw.version, failures: Object.freeze(failures), omitted_failures: raw.omitted_failures });
+}
+
+// Raw CLI output stays private. Validate accounting before the explicitly selected diagnostic extension.
+function summary(raw, operation, diagnosticVersion = null) {
   const code = 'invalid_core_report';
   const check = value => requireThat(value, code);
   check(object(raw) && raw.operation === `private_storage_fragments_${operation}`);
@@ -214,6 +412,12 @@ function summary(raw, operation) {
     result.report_version = 2;
     for (const key of REPAIR_FIELDS) result[key] = raw[key];
   }
+  // Unsolicited diagnostics are deliberately ignored, including malformed/future
+  // values. Only the configuration-selected deposit version authorizes parsing.
+  if (operation === 'deposit' && diagnosticVersion !== null) {
+    check(Object.hasOwn(raw, 'deposit_diagnostics'));
+    result.deposit_diagnostics = depositDiagnostics(raw.deposit_diagnostics, raw.fragments, complete, diagnosticVersion);
+  }
   return Object.freeze(result);
 }
 
@@ -290,6 +494,9 @@ export class CoreStorage {
       if (operation === 'create') await absent(config.stateDirectory);
       else await directory(config.stateDirectory);
       const args = ['--control-socket', config.controlSocket, 'storage', 'fragments', operation, '--state', config.stateDirectory];
+      const diagnostics = operation === 'deposit'
+        ? DIAGNOSTIC_SELECTORS.find(([key]) => config[key] === true) : null;
+      if (diagnostics) args.push(diagnostics[1]);
       if (!['create', 'status'].includes(operation)) await controlSocket(config.controlSocket);
       if (operation !== 'status') {
         retained.push(await privateFile(config.identity, 65536));
@@ -334,7 +541,7 @@ export class CoreStorage {
       let restored = false;
       if (!execution.stopped && !execution.spawnError && execution.signal === null) {
         try {
-          report = summary(JSON.parse(execution.output), operation);
+          report = summary(JSON.parse(execution.output), operation, diagnostics?.[2] ?? null);
           requireThat((execution.code === 0 && report.operation_complete)
             || (execution.code === 1 && !report.operation_complete), 'invalid_core_report');
           status = report.operation_complete ? 'complete' : 'incomplete';
