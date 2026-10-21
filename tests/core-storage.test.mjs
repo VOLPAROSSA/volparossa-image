@@ -1955,3 +1955,80 @@ test('malformed and oversized background records fail closed without exporting r
     assert.equal(f.children[0].exitCode, 0);
   }
 });
+
+function diagnosticV10(read = { step: 'body_read', returned_outcome: null }) {
+  return { ...diagnosticV6({ stage: 'challenge', deadline_scope: 'operation', tls_failure: null,
+    stream_failure: null, flow_acquire: null, challenge: { phase: 'challenge_read_verify',
+      before_challenge: '1_to_5s', in_challenge: '90_to_120s', read } },
+  { fragment_index: 2, copy_index: 1, operation: 'append', stage: 'agent_ready',
+    category: 'agent_rejected', agent_code: 'CONTENT_UNAVAILABLE' }), version: 10 };
+}
+
+test('v10 explicitly selects one deposit flag and preserves other operations and legacy v9 default', async t => {
+  const f = await setup(t, { configChanges: { challengeReadDiagnosticsV10: true }, process: fakeProcess(async operation => ({
+    raw: { ...coreReport(operation), ...(operation === 'deposit' ? { deposit_diagnostics: { version: 10, failures: [], omitted_failures: 0 } } : {}) },
+  })) });
+  assert.equal((await f.adapter.deposit({ input: f.input, alreadyEncrypted: true })).status, 'complete');
+  assert.equal(f.calls[0].args.filter(value => value === '--challenge-read-diagnostics-v10').length, 1);
+  assert.equal(f.calls[0].args[7], '--challenge-read-diagnostics-v10');
+  await f.adapter.status(); await f.adapter.progress(); await f.adapter.delete();
+  for (const call of f.calls.slice(1)) assert.ok(!call.args.includes('--challenge-read-diagnostics-v10'));
+  for (const configChanges of [{ tlsCloseDiagnosticsV9: true }, { tlsCloseDiagnosticsV9: true, challengeReadDiagnosticsV10: false }]) {
+    const old = await setup(t, { configChanges, process: fakeProcess(async () => ({
+      raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: diagnosticV9() }, code: 1,
+    })) });
+    assert.equal((await old.adapter.deposit({ input: old.input, alreadyEncrypted: true })).storage.deposit_diagnostics.version, 9);
+    assert.ok(!old.calls[0].args.includes('--challenge-read-diagnostics-v10'));
+  }
+});
+
+test('v10 finite challenge reads retain exact attempt, buckets, null meaning and closed privacy projection', async t => {
+  let current = diagnosticV10();
+  const f = await setup(t, { configChanges: { challengeReadDiagnosticsV10: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+  })) });
+  const allowed = { length_read: [null, 'io_eof', 'io_other', 'invalid', 'wire_timeout'],
+    body_read: [null, 'io_eof', 'io_other', 'wire_timeout'], verification: [null, 'invalid', 'verification_rejected'] };
+  for (const step of Object.keys(allowed)) for (const returned_outcome of [null, 'io_eof', 'io_other', 'invalid', 'verification_rejected', 'wire_timeout']) {
+    current = diagnosticV10({ step, returned_outcome });
+    const result = await f.adapter.deposit({ input: f.input, alreadyEncrypted: true });
+    if (allowed[step].includes(returned_outcome)) {
+      assert.deepEqual(result.storage.deposit_diagnostics, current);
+      assert.equal(result.status, 'incomplete'); assert.equal(result.local_process_joined, true);
+      assert.equal(result.remote_cleanup_confirmed, false);
+      assert.ok(Object.isFrozen(result.storage.deposit_diagnostics.failures[0].agent_detail.challenge.read));
+    } else { assert.equal(result.code, 'invalid_core_report'); assert.equal(result.storage, null); }
+    assert.deepEqual(await readFile(f.input), CONTENT);
+    for (const canary of [f.root, ...KEYS]) assert.ok(!JSON.stringify(result).includes(canary));
+  }
+  for (const diagnostics of [diagnosticV10(null), { ...diagnosticV9('read_io'), version: 10 }]) {
+    current = diagnostics;
+    assert.deepEqual((await f.adapter.deposit({ input: f.input, alreadyEncrypted: true })).storage.deposit_diagnostics, diagnostics);
+  }
+});
+
+test('v10 rejects mixed selectors, malformed read fields, wrong phase, unsolicited and downgraded reports', async t => {
+  for (const value of [null, 0, 1, 'true', {}, []]) {
+    await assert.rejects(setup(t, { configChanges: { challengeReadDiagnosticsV10: value } }), { code: 'invalid_configuration' });
+  }
+  for (const other of ['appendDiagnosticsV7', 'flowAcquireDiagnosticsV8', 'tlsCloseDiagnosticsV9']) {
+    await assert.rejects(setup(t, { configChanges: { challengeReadDiagnosticsV10: true, [other]: true } }), { code: 'invalid_configuration' });
+  }
+  const invalid = [diagnosticV9(), diagnosticV10({ step: 'PRIVATE-READ-CANARY', returned_outcome: null }),
+    diagnosticV10({ step: 'body_read' }), diagnosticV10({ step: 'body_read', returned_outcome: false }),
+    diagnosticV10({ step: 'body_read', returned_outcome: null, raw: 'PRIVATE-READ-CANARY' })];
+  const phase = diagnosticV10(); phase.failures[0].agent_detail.challenge.phase = 'grant_write_flush'; invalid.push(phase);
+  const missing = diagnosticV10(); delete missing.failures[0].agent_detail.challenge.read; invalid.push(missing);
+  for (const current of invalid) {
+    const f = await setup(t, { configChanges: { challengeReadDiagnosticsV10: true }, process: fakeProcess(async () => ({
+      raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: current }, code: 1,
+    })) });
+    const result = await f.adapter.deposit({ input: f.input, alreadyEncrypted: true });
+    assert.equal(result.code, 'invalid_core_report'); assert.equal(result.storage, null);
+    assert.ok(!JSON.stringify(result).includes('PRIVATE-READ-CANARY'));
+  }
+  const unsolicited = await setup(t, { configChanges: { tlsCloseDiagnosticsV9: true }, process: fakeProcess(async () => ({
+    raw: { ...coreReport('deposit', 'uncertain', false), deposit_diagnostics: diagnosticV10() }, code: 1,
+  })) });
+  assert.equal((await unsolicited.adapter.deposit({ input: unsolicited.input, alreadyEncrypted: true })).code, 'invalid_core_report');
+});
