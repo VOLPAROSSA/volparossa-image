@@ -43,6 +43,10 @@ marked optional:
 | `fragmentBytes` | Maximum fragment size, 1 byte to 1 GiB |
 | `lifetimeSeconds` | Requested lease duration, 1–2,678,400 seconds, also constrained by grants |
 | `deadlineMs` | Optional operation budget, 100–1,800,000 ms; default 30 minutes |
+| `appendDiagnosticsV7` | Optional boolean, default false; select exact deposit diagnostic v7 with APPEND timing |
+| `flowAcquireDiagnosticsV8` | Optional boolean, default false; select exact v8 including local flow-acquisition observations |
+| `tlsCloseDiagnosticsV9` | Optional boolean, default false; select exact v9 including finite TLS-close reasons |
+| `challengeReadDiagnosticsV10` | Optional boolean, default false; select exact v10 including request-local challenge-read detail |
 
 Identity, passphrase, grant, ciphertext and restored files must be same-owner,
 single-link regular files with mode `0600`, directly within same-owner `0700`
@@ -89,6 +93,40 @@ does not bind that later path lookup to the original inode. Private owned parent
 the core's immutable signed hashes provide the supported boundary. No fictitious
 `--input-fd` or `/proc/self/fd` workaround is used. Paths, but not secret contents,
 are necessarily present in the local command line.
+
+## Explicit deposit diagnostics
+
+At most one of the four diagnostic selectors may be `true`. Every supplied selector
+must be a boolean. A selected deposit sends exactly its corresponding
+`--append-diagnostics-v7`, `--flow-acquire-diagnostics-v8`, `--tls-close-diagnostics-v9`
+or `--challenge-read-diagnostics-v10` flag and requires the exact selected report
+version. Missing, downgraded, future, malformed or extra diagnostic fields fail closed
+as `invalid_core_report`. There is no generic opt-in for diagnostic v1–v6; their
+closed observations are inherited fields of the explicitly selected v7–v10 versions.
+
+With all selectors absent or false, the bridge preserves its original argv and
+result behavior: unsolicited `deposit_diagnostics` are ignored, including malformed
+or future values. A payload's version marker never authorizes projection. Selectors
+are inactive on create, status, progress, restore, renew and delete; unsolicited
+diagnostics on those operations are ignored even when a selector is configured.
+
+A valid selected deposit adds only a frozen `storage.deposit_diagnostics` summary.
+It binds failures to the already validated fragment/copy geometry, limits displayed
+failures to eight, and checks omissions, uniqueness, exact nested fields and finite
+enums. Nullable outcomes remain unknown. Diagnostics do not replace the original
+error, accounting, completion, retry decision or cleanup evidence and never expose
+provider keys, paths, free-form stderr or payload bytes.
+
+In v10, a non-null challenge-read detail belongs only to `challenge_read_verify`
+and distinguishes length read, body read and synchronous verification. Its returned
+outcome is closed and step-specific; `null` means no returned wire outcome was
+observed. It alone establishes neither cancellation nor timeout nor a remote cause.
+The existing `before_challenge` and `in_challenge` buckets still describe the whole
+challenge boundary. No deadline, retry, frame, authorization or sandbox policy changes.
+
+The retained maintenance implementation on the separate diagnostic branch is pending
+integration. This composition adds no background session, maintenance method or
+snapshot-CLI behavior.
 
 ## Resume, restore and contribution accounting
 
@@ -183,6 +221,16 @@ uniform new-archive policy, legacy higher-copy lifecycle, no-overwrite/readback 
 and cancellation. Their storage responses are fabricated **test fixtures**.
 Two tests use a real synthetic Node child solely to verify process termination/join.
 They do not run the Rust core, storage peers, protected network paths or Immich.
+Diagnostic tests reuse the fabricated CLI fixture and include direct full-result and
+argv comparisons against the exact original main SDK at
+`e817b48067108e0faaab7e2067a258bc07a4b045`. The readable test-only copy
+`tests/fixtures/core-storage-default-e817b480.mjs` is unchanged: 20,915 bytes,
+SHA-256 `d274c294a4f7c500aac552629997487c79e67faaa89dddd1383309d7e58273b0`.
+The test verifies that identity before use. The diagnostic validators and selected
+contract cases derive from retained Image
+`f51b8ace0352377c7068a93fc8f4544f18e52978`, with its implicit v1–v6 acceptance
+replaced by explicit configuration gating. Source checks do not prove actual peer
+behavior or resolution of any historical trial failure.
 The separate [peer-backed snapshot trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039)
 passes with older Image `e177afebabd99ac0773de2a73d60275346a5de52` and core
 `cf4de524ce885af95d0f75fcb53d80254486c27f`: eight fragment copies, provider A offline,
