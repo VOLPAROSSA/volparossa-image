@@ -121,7 +121,8 @@ replacements on providers outside the original pool. The adapter checks the orig
 placement, authorization/history counts and per-copy/per-provider charge totals;
 the core remains responsible for verifying signed authorization. Pending retirement
 does not prevent ordinary lifecycle operations or independently verified restores.
-Image does not initiate replacements or run automatic maintenance.
+The explicit owner-maintenance binding below can ask the core to maintain an enrolled
+archive. Image does not choose replacements or implement its own repair loop.
 
 Interrupted or unconfirmed copies remain charged. The reported physical payload upper
 bound includes reserved, committed and uncertain copies, including temporary replacement
@@ -136,6 +137,56 @@ file against the caller's expected hash. Retain that hash from a trusted origina
 authenticated recovery record; a peer-supplied unsigned receipt is not an identity proof.
 Repeated restores do not consume remote copies. A failed/cancelled readback preserves
 any already-published output for inspection; it never silently overwrites it on retry.
+
+## Finite owner maintenance
+
+The adapter also binds the core's `storage fragments maintenance enroll|serve|status`
+commands. This requires the developing core maintenance interface; an older core
+without those commands is not silently substituted. Opening a configuration or
+depositing a snapshot does **not** enroll it for background work.
+
+`enrollMaintenance(request, {signal?})` explicitly signs one finite authorization.
+The request contains `enrollment` (a new private directory outside the archive),
+`fromProviderKey`, replacement `providers` (`key` and private `grant` paths),
+`authorizationSeconds`, `lifetimeSeconds`, `renewBeforeSeconds`,
+`maximumChargedBytes` and `maximumTurnBytes`. The core checks the existing archive,
+owner, grants and limits. The application neither grants itself capacity nor
+automatically renews this authorization.
+
+With an existing valid enrollment:
+
+```js
+const session = await storage.startMaintenance({
+  enrollment: '/private/image/maintenance',
+});
+const checkpoint = await session.status();
+// Foreground operations MUST use this same storage instance.
+// await storage.restore({output: '/private/recovery/snapshot.pgp', sha256});
+await session.stop();
+const stopped = await session.done;
+await storage.close();
+```
+
+The core still controls admission, renewal, repair, accounting and reconnects.
+The adapter supervises only its owned CLI child. Before a foreground operation,
+it stops and joins that child **before** attempting the core archive lock. After
+a successful non-delete operation, it may resume the same unchanged, unexpired
+enrollment. Failure, cancellation, deletion or `close()` does not silently restart
+maintenance. An optional `maximumTurns` bounds one adapter session across its
+foreground pauses; it is not a new storage policy.
+
+The child emits bounded newline-delimited checkpoints; the adapter keeps only
+the latest closed summary, not a growing log. A retained checkpoint is not proof
+that maintenance is currently running. Results distinguish the locally owned
+process from retained state and do not claim remote cleanup or automatic grant
+refresh. `close()` cancels foreground work, joins owned maintenance and rejects
+unconfirmed cleanup; later calls retain that failure.
+
+This is explicit owner-process supervision, not an installed system service or
+proof of unattended availability after all owner processes stop. A future owner
+process can reopen the original journal and still-valid enrollment, without
+recreating leases. Application enrollment, grant refresh and complete reciprocal
+capacity management remain separate unfinished work.
 
 ## Closed results and cancellation
 
@@ -180,8 +231,10 @@ node --test tests/core-storage.test.mjs
 The focused tests validate exact CLI arguments, private filesystem requirements,
 same-journal retries, bounded v1/v2 reports, replacement overlap/history accounting,
 uniform new-archive policy, legacy higher-copy lifecycle, no-overwrite/readback checks
-and cancellation. Their storage responses are fabricated **test fixtures**.
-Two tests use a real synthetic Node child solely to verify process termination/join.
+and cancellation. Maintenance tests additionally exercise child supervision,
+foreground pause/join/resume, finite unchanged enrollment, bounded checkpoints
+and retained cleanup failures. Their storage responses are fabricated **test fixtures**.
+Some tests use real inert Node children to verify supervision and process termination/join.
 They do not run the Rust core, storage peers, protected network paths or Immich.
 The separate [peer-backed snapshot trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039)
 passes with older Image `e177afebabd99ac0773de2a73d60275346a5de52` and core
