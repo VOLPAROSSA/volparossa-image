@@ -2,11 +2,18 @@
 
 # Project VOLPAROSSA Image
 
-**Immich connected to the VOLPAROSSA Decentralized Intelligent Cooperative Network.**
+**Keep your photo library, without having to become a full-time server operator.**
 
-The goal: manage, back up and share your photos and videos without maintaining a personal
-server that must stay online. Your devices retain control of keys and private data;
-VOLPAROSSA supplies cooperative storage, connectivity and eligible background work.
+Family photos and videos need more than a place to upload bytes: albums, browsing
+and recovery must still work when a device is replaced. VOLPAROSSA Image builds
+on Immich, with the goal of managing and synchronizing that library without a
+personally maintained server that must stay online.
+
+The [VOLPAROSSA core](https://github.com/VOLPAROSSA/volparossa) provides the shared
+storage foundation: peers hold encrypted fragments while recovery keys stay with
+the owner. Contributors can help connect the [snapshot recovery slice](docs/SNAPSHOT_STORAGE.md)
+to real library and mobile use. Persistent repair, renewal and deletion through
+the current adapter still need a joined proof.
 
 > Development integration, not yet a working server-independent Immich application.
 > A scoped encrypted-snapshot/peer-recovery trial passes; live library operation and
