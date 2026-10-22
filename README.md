@@ -1,6 +1,6 @@
 ![VOLPAROSSA Image banner with photographs developing in a warmly lit darkroom](docs/assets/banner-volparossa-image.png)
 
-# Project VOLPAROSSA Image
+# VOLPAROSSA Image
 
 **Keep your photo library, without having to become a full-time server operator.**
 
