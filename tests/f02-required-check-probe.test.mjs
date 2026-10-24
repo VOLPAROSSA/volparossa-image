@@ -2,6 +2,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('F02 required-check negative probe (intentional failure)', () => {
-  assert.fail('Expected failure to verify the source-contracts merge gate');
+test('F02 required-check recovery probe', () => {
+  assert.equal(2 + 2, 4);
 });
