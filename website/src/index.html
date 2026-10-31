@@ -1,0 +1,98 @@
+<section class="image-hero image-dark" id="top" aria-labelledby="hero-title">
+  {{hero_picture}}
+  <div class="wrap image-hero-content">
+    <nav class="image-breadcrumb" aria-label="Breadcrumb"><a href="{{applications}}">Applications</a><span aria-hidden="true">/</span><span aria-current="page">Image</span></nav>
+    <p class="eyebrow">VOLPAROSSA IMAGE</p>
+    <h1 id="hero-title">Your memories.<br>A shared foundation.</h1>
+    <p class="image-hero-lead">Building on Immich to preserve your photo library across devices.</p>
+    <span class="status light">In development</span>
+    <div class="actions"><a class="button primary" href="#how-it-works">Explore how it works <span aria-hidden="true">→</span></a><a class="button ghost" href="{{documentation}}">Read the documentation</a></div>
+  </div>
+</section>
+
+<section class="image-product image-paper" id="immich" aria-labelledby="immich-title">
+  <div class="wrap image-product-grid">
+    <div class="image-product-copy">
+      <h2 id="immich-title">A familiar home for your memories.</h2>
+      <p class="image-lead">Built on Immich. Extended by VOLPAROSSA.</p>
+      <a class="image-immich-brand" href="https://immich.app/"><img src="assets/upstream/immich.svg" width="88" height="88" alt=""><span>Immich</span></a>
+      <p>Immich provides the familiar photo-library experience. VOLPAROSSA is developing the connection to Core for encrypted storage, recovery and use across devices.</p>
+      <p class="image-scope">The current integration focuses on private snapshots. Live library and mobile use are still being developed.</p>
+      <div class="image-links"><a class="text-link" href="https://immich.app/">Explore Immich ↗</a><a class="text-link" href="#how-it-works">Understand the workflow <span aria-hidden="true">→</span></a></div>
+    </div>
+    <figure class="image-interface"><div class="image-product-setting">{{surround_picture}}</div><img src="assets/upstream/image-screen.webp" width="900" height="603" alt="Immich’s tag view showing a public sample photo collection and library navigation." loading="lazy" decoding="async"><figcaption>Immich interface example. The VOLPAROSSA integration is in development.</figcaption></figure>
+  </div>
+  <div class="wrap image-roles">
+    <article>{{photos_icon}}<div><h3>Immich</h3><p class="image-role-lead">Browse and organise.</p><p>The open-source photo and video library at the heart of the experience.</p></div></article>
+    <article>{{storage_icon}}<div><h3>Core</h3><p class="image-role-lead">Storage and recovery.</p><p>The shared foundation for encrypted fragments, placement and storage accounting.</p></div></article>
+    <article>{{user_icon}}<div><h3>You</h3><p class="image-role-lead">Keys and permissions.</p><p>Keep control of recovery credentials and deliberate sharing choices.</p></div></article>
+  </div>
+</section>
+
+<section class="image-library image-paper" id="library" aria-labelledby="library-title">
+  <div class="wrap image-section-heading">
+    <h2 id="library-title">A library is more than its photos.</h2>
+    <p class="image-lead">Preserve the originals and the information that keeps them together.</p>
+    <p class="image-intro">A snapshot brings a prepared copy of the library database and media into one recoverable archive. The recovery key and trusted recovery records must be kept separately by the owner.</p>
+  </div>
+  <div class="image-library-stage">
+    <div class="image-library-panorama">{{library_picture}}</div>
+    <div class="wrap image-library-parts">
+      <article><div class="image-library-crop">{{library_1_picture}}</div><div class="image-part-copy"><h3>Photos and videos</h3><p>The original media you want to preserve.</p></div></article>
+      <article><div class="image-library-crop">{{library_2_picture}}</div><div class="image-part-copy"><h3>Albums and organisation</h3><p>The library data that keeps your collection in context.</p></div></article>
+      <article class="image-owner-recovery"><div class="image-library-crop">{{library_3_picture}}</div><div class="image-part-copy"><h3>Recovery information</h3><p>Keep your key and trusted recovery records independently available.</p></div></article>
+    </div>
+  </div>
+  <p class="wrap image-snapshot-note">A snapshot is a prepared copy of the library at a particular point in time.</p>
+</section>
+
+<section class="image-recovery image-dark" id="how-it-works" aria-labelledby="recovery-title">
+  <div class="wrap image-section-heading"><h2 id="recovery-title">Preserve it. Protect it. Bring it back.</h2><p class="image-lead">Snapshot recovery is a development step toward a working library.</p></div>
+  <div class="image-recovery-stage">
+    <div class="image-recovery-panorama">{{recovery_picture}}</div>
+    <ol class="image-recovery-steps">
+      <li><div class="image-step-copy"><span class="image-step-number" aria-hidden="true">01</span><h3>Prepare a snapshot</h3><p>Start with a prepared, consistent copy of the library database and media. Keep the original library unchanged.</p></div><div class="image-step-crop">{{step_1_picture}}</div><span class="image-step-arrow" aria-hidden="true">→</span></li>
+      <li><div class="image-step-copy"><span class="image-step-number" aria-hidden="true">02</span><h3>Encrypt before sharing</h3><p>Encrypt the archive locally. Keep the recovery key and trusted recovery records separate from the stored data.</p></div><div class="image-step-crop">{{step_2_picture}}</div><span class="image-step-arrow" aria-hidden="true">→</span></li>
+      <li><div class="image-step-copy"><span class="image-step-number" aria-hidden="true">03</span><h3>Store across participants</h3><p>Core divides the encrypted archive into fragments and keeps redundant copies with authorised storage participants.</p><p class="image-step-caption">Encrypted fragments. Redundant copies.</p></div><div class="image-step-crop">{{step_3_picture}}</div><span class="image-step-arrow" aria-hidden="true">→</span></li>
+      <li><div class="image-step-copy"><span class="image-step-number" aria-hidden="true">04</span><h3>Retrieve and restore</h3><p>Retrieve and verify the encrypted archive, then decrypt it locally with your retained key into a new recovery copy.</p><p class="image-step-caption">Retrieve &amp; verify <span aria-hidden="true">→</span> Decrypt locally</p></div><div class="image-step-crop">{{step_4_picture}}</div></li>
+    </ol>
+  </div>
+  <div class="wrap image-recovery-notes"><p>The current storage command retrieves ciphertext. Supplying the key and decrypting are separate operations.</p><p class="image-recovery-boundary">A restored archive still needs a verified Immich import before it becomes a working photo library.</p><a class="text-link" href="#development">See the development evidence <span aria-hidden="true">↓</span></a></div>
+</section>
+
+<section class="image-devices image-paper" id="devices" aria-labelledby="devices-title">
+  <div class="wrap image-devices-copy"><h2 id="devices-title">A library that moves with you.</h2><span class="status">Target experience</span><p class="image-lead">Designed for Android, iPhone, iPad and the web.</p><p>The goal is to browse and synchronise your library without personally maintaining a server that must stay online. Live library access and device synchronisation are being developed.</p><p class="image-scope">Recovery still needs your credentials and enough available storage participants.</p></div>
+  <figure class="image-devices-figure">
+    <div class="image-devices-stage">{{devices_picture}}
+      <div class="image-device-photos image-phone" aria-hidden="true">{{device_gallery}}</div>
+      <div class="image-device-photos image-tablet" aria-hidden="true">{{device_gallery}}</div>
+      <div class="image-device-photos image-laptop" aria-hidden="true">{{device_gallery}}</div>
+    </div>
+    <figcaption><div class="image-platform-labels"><span>Android</span><span>iPhone &amp; iPad</span><span>Web</span></div><p>Target experience illustrated with a fictional photo collection.</p></figcaption>
+  </figure>
+</section>
+
+<section class="image-privacy image-dark" id="privacy" aria-labelledby="privacy-title">
+  <div class="wrap"><h2 id="privacy-title">Personal moments. Personal boundaries.</h2><p class="image-lead">Private photos, faces and locations need explicit boundaries.</p>
+    <div class="image-privacy-items">
+      <article>{{key_icon}}<div><h3>Your recovery keys</h3><p>Keep an independent private copy of the key and credentials needed for recovery. Storage participants do not receive your decryption key.</p></div></article>
+      <article>{{lock_icon}}<div><h3>Encrypted storage</h3><p>The snapshot is encrypted before it reaches storage participants, including the media and library metadata inside it.</p></div></article>
+      <article>{{shield_icon}}<div><h3>Careful processing</h3><p>Private image analysis requires local or explicitly trusted execution. Encrypted storage alone does not make arbitrary remote processing private.</p></div></article>
+    </div><p class="image-privacy-note">Private media and metadata are not automatically published to public cache or used for model training.</p>
+  </div>
+</section>
+
+<section class="image-development image-paper" id="development" aria-labelledby="development-title">
+  <div class="wrap"><h2 id="development-title">What works today. What comes next.</h2><p class="image-intro">A bounded snapshot trial is demonstrated. The complete photo-library experience is still being built.</p>
+    <div class="image-evidence-grid">
+      <article><div class="image-evidence-label">{{check_icon}}<h3>Demonstrated in a scoped trial</h3></div><p>An encrypted snapshot made from synthetic test data was stored across three providers. With one provider offline, the remaining providers supplied the encrypted data for two successful local decryptions and restores by the owner.</p><p>The recorded trial also completed deletion of its stored copies and cleanup.</p><a class="text-link image-source-link" href="https://github.com/VOLPAROSSA/volparossa-image/blob/main/README.md">Read the snapshot evidence <span>View on GitHub ↗</span></a></article>
+      <article><div class="image-evidence-label"><span class="image-development-dot" aria-hidden="true"></span><h3>In development</h3></div><p>End-to-end testing of the current storage adapter, a running restored Immich library, device synchronisation, mobile integration and automatic storage maintenance.</p><a class="text-link image-source-link" href="https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/CLIENT_INTEGRATION.md">Explore the integration work <span>View on GitHub ↗</span></a></article>
+    </div>
+    <p class="image-evidence-scope">The trial covers its pinned snapshot implementation, not the newer adapter or live library use.</p><p class="image-release-scope">There is no supported end-user release yet.</p>
+  </div>
+</section>
+
+<section class="image-closing image-dark" id="contribute" aria-labelledby="contribute-title">
+  {{closing_picture}}
+  <div class="wrap image-closing-content"><h2 id="contribute-title">Help give memories a lasting home.</h2><p>Contribute to recovery, mobile integration, documentation and testing. Help turn the shared storage foundation into a complete photo-library experience.</p><div class="actions"><a class="button primary" href="{{documentation}}">Read the documentation <span aria-hidden="true">→</span></a><a class="button ghost" href="{{repository}}">{{github_icon}}Contribute on GitHub</a></div><a class="image-asset-notices" href="assets/CREDITS.txt">Image artwork and notices</a></div>
+</section>

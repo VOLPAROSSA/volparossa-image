@@ -1,0 +1,89 @@
+name: Image website
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/image-website.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/image-website.yml'
+  workflow_dispatch:
+
+# Publication is manual, on main only, after a separate reviewed release decision.
+# Preview validation never receives deployment credentials or an OIDC token.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate static Image website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the event's exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build a noindex preview without Image runtime execution
+        run: python3 website/scripts/build_site.py --output website/preview/volparossa-image
+      - name: Check semantics, project paths, assets and content boundaries
+        run: python3 website/scripts/check_site.py --output website/preview/volparossa-image
+      - name: Preserve reviewable preview
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-website-preview
+          path: website/preview/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Prepare production Pages artifact
+    needs: validate
+    if: github.repository == 'VOLPAROSSA/volparossa-image' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build only the project website
+        run: python3 website/scripts/build_site.py --production --output website/dist/volparossa-image
+      - name: Check production artifact
+        run: python3 website/scripts/check_site.py --production --output website/dist/volparossa-image
+      - name: Upload only the generated site's root
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/dist/volparossa-image
+          include-hidden-files: true
+
+  deploy:
+    name: Publish Image project site
+    needs: [validate, build]
+    if: github.repository == 'VOLPAROSSA/volparossa-image' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: image-github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Pages must already be configured for GitHub Actions by a repository admin.
+      # No automatic enablement, domain change or source-tree checkout here.
+      - name: Verify the existing Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: false
+      - name: Deploy the checked static artifact
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

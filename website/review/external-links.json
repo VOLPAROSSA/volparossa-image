@@ -1,0 +1,77 @@
+[
+  {
+    "url": "https://github.com/VOLPAROSSA/.github/blob/main/CODE_OF_CONDUCT.md",
+    "status": 200,
+    "resolved": "https://github.com/VOLPAROSSA/.github/blob/main/CODE_OF_CONDUCT.md"
+  },
+  {
+    "url": "https://github.com/VOLPAROSSA/volparossa-image",
+    "status": 200,
+    "resolved": "https://github.com/VOLPAROSSA/volparossa-image"
+  },
+  {
+    "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/README.md",
+    "status": 200,
+    "resolved": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/README.md"
+  },
+  {
+    "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/CLIENT_INTEGRATION.md",
+    "status": 200,
+    "resolved": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/CLIENT_INTEGRATION.md"
+  },
+  {
+    "url": "https://immich.app/",
+    "status": 200,
+    "resolved": "https://immich.app/"
+  },
+  {
+    "url": "https://volparossa.org/",
+    "status": 200,
+    "resolved": "https://volparossa.org/"
+  },
+  {
+    "url": "https://volparossa.org/#discover",
+    "status": 200,
+    "resolved": "https://volparossa.org/#discover"
+  },
+  {
+    "url": "https://volparossa.org/accessibility/",
+    "status": 200,
+    "resolved": "https://volparossa.org/accessibility/"
+  },
+  {
+    "url": "https://volparossa.org/applications/",
+    "status": 200,
+    "resolved": "https://volparossa.org/applications/"
+  },
+  {
+    "url": "https://volparossa.org/contribute/",
+    "status": 200,
+    "resolved": "https://volparossa.org/contribute/"
+  },
+  {
+    "url": "https://volparossa.org/credits/",
+    "status": 200,
+    "resolved": "https://volparossa.org/credits/"
+  },
+  {
+    "url": "https://volparossa.org/docs/",
+    "status": 200,
+    "resolved": "https://volparossa.org/docs/"
+  },
+  {
+    "url": "https://volparossa.org/docs/#image",
+    "status": 200,
+    "resolved": "https://volparossa.org/docs/#image"
+  },
+  {
+    "url": "https://volparossa.org/privacy/",
+    "status": 200,
+    "resolved": "https://volparossa.org/privacy/"
+  },
+  {
+    "url": "https://volparossa.org/volparossa/",
+    "status": 200,
+    "resolved": "https://volparossa.org/volparossa/"
+  }
+]

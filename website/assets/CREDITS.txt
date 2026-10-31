@@ -1,0 +1,28 @@
+VOLPAROSSA Image — website artwork and notices
+
+Image artwork: generated with OpenAI image generation, 31 October 2026, from
+owner-supplied Lantern hero (concept 5) and Mosaic body (concept 6) references.
+All landscape photographs in the illustration and target device collection are
+fictional. Artwork is not evidence of running product functionality.
+Masters, exact prompts, source references, export coordinates and SHA-256 hashes
+are retained in the source repository's website/ directory; only optimized
+exports are served to visitors.
+
+Immich: original mark and complete upstream tag-view screenshot, pinned through
+VOLPAROSSA/volparossa.github.io at cebc20cd25f369da9bca2d6e80f972a63f7f27a8.
+Original upstream: https://github.com/immich-app/immich
+Screenshot: docs/docs/features/img/tag-view.webp
+Mark: design/immich-logo.svg
+GNU Affero General Public License v3: upstream/IMMICH-LICENSE.txt
+This is an upstream example, not a completed VOLPAROSSA integration. Original
+brand display was requested by the owner. No endorsement or partnership is
+claimed; existing brand-use conditions remain in the source asset register.
+
+Shared theme: VOLPAROSSA design 1.0.3, exact source commit above. Original project
+logo, fonts, header/footer and navigation remain unchanged. Font licenses are in
+fonts/. GitHub Octicons MIT notice is in icons/OCTICONS-LICENSE.txt.
+Local Lucide icons retain their original geometry and ISC license in
+icons/lucide/LICENSE; exact source commit and blobs in icons/lucide/source.json.
+
+Source, licensing and complete provenance:
+https://github.com/VOLPAROSSA/volparossa-image/tree/main/website
