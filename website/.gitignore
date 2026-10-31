@@ -1,0 +1,6 @@
+preview/
+dist/
+qa/
+node_modules/
+__pycache__/
+scripts/__pycache__/

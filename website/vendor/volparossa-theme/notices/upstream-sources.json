@@ -1,0 +1,32 @@
+[
+  {
+    "name": "code-screen",
+    "source": "https://github.com/anomalyco/opencode/blob/dev/packages/web/src/assets/lander/screenshot.png",
+    "git_blob": "b9d8bf4df1319cb4d378b7bda73002e4fc621860",
+    "sha256": "14b01372a2589a120ab0d6a0510868e71bceadcbd1f1278fb099d700a03912cb"
+  },
+  {
+    "name": "image-screen",
+    "source": "https://github.com/immich-app/immich/blob/main/docs/docs/features/img/tag-view.webp",
+    "git_blob": "25f842b879e989a1a0c5868d1815c3f709071ac3",
+    "sha256": "ab83252d2a37d35db66f6fa812cae5f41da4d3db6f53f67706af38be6f33e3da"
+  },
+  {
+    "name": "cloud-screen",
+    "source": "https://github.com/opencloud-eu/docs/blob/main/docs/user/files-and-folders/img/favorites/favorites-personal.png",
+    "git_blob": "711096d42d694bc146741a48b3bf228cdf92ffba",
+    "sha256": "1d11ef2b6942b880090b1366cd83853bdb6a66b448e96ae81dde1c5e08783de7"
+  },
+  {
+    "name": "opencode-mark",
+    "source": "https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/asset/brand/opencode-logo-light.svg",
+    "git_blob": "7ed0af003bb6d3947106e5dd5b45fd08cdb58ca5",
+    "sha256": "b47a4fecc77599382e238868e74064bbe92307b0e253a32f0b1a026517a2d2a6"
+  },
+  {
+    "name": "immich-mark",
+    "source": "https://github.com/immich-app/immich/blob/main/design/immich-logo.svg",
+    "git_blob": "376fa6f3e837e907acafe8a5ae85a1beb7bcfac7",
+    "sha256": "dfa5ef704d07854914306c0c224173bda2710f8fc0dffeb7d78690f58f9811a6"
+  }
+]

@@ -1,0 +1,266 @@
+{
+  "hero-lantern": {
+    "desktop": [
+      {
+        "stem": "hero-lantern-desktop-960",
+        "width": 960,
+        "height": 480
+      },
+      {
+        "stem": "hero-lantern-desktop-1440",
+        "width": 1440,
+        "height": 720
+      },
+      {
+        "stem": "hero-lantern-desktop-1774",
+        "width": 1774,
+        "height": 887
+      }
+    ],
+    "mobile": [
+      {
+        "stem": "hero-lantern-mobile-480",
+        "width": 480,
+        "height": 265
+      },
+      {
+        "stem": "hero-lantern-mobile-768",
+        "width": 768,
+        "height": 424
+      }
+    ]
+  },
+  "immich-photo-surround": {
+    "desktop": [
+      {
+        "stem": "immich-photo-surround-desktop-960",
+        "width": 960,
+        "height": 685
+      },
+      {
+        "stem": "immich-photo-surround-desktop-1244",
+        "width": 1244,
+        "height": 887
+      }
+    ],
+    "mobile": [
+      {
+        "stem": "immich-photo-surround-mobile-480",
+        "width": 480,
+        "height": 342
+      },
+      {
+        "stem": "immich-photo-surround-mobile-768",
+        "width": 768,
+        "height": 548
+      }
+    ]
+  },
+  "library-table": {
+    "desktop": [
+      {
+        "stem": "library-table-desktop-960",
+        "width": 960,
+        "height": 314
+      },
+      {
+        "stem": "library-table-desktop-1440",
+        "width": 1440,
+        "height": 471
+      },
+      {
+        "stem": "library-table-desktop-1774",
+        "width": 1774,
+        "height": 580
+      }
+    ]
+  },
+  "library-1": {
+    "desktop": [
+      {
+        "stem": "library-1-desktop-480",
+        "width": 480,
+        "height": 429
+      },
+      {
+        "stem": "library-1-desktop-560",
+        "width": 560,
+        "height": 500
+      }
+    ]
+  },
+  "library-2": {
+    "desktop": [
+      {
+        "stem": "library-2-desktop-480",
+        "width": 480,
+        "height": 306
+      },
+      {
+        "stem": "library-2-desktop-768",
+        "width": 768,
+        "height": 489
+      }
+    ]
+  },
+  "library-3": {
+    "desktop": [
+      {
+        "stem": "library-3-desktop-480",
+        "width": 480,
+        "height": 511
+      }
+    ]
+  },
+  "recovery-workbench": {
+    "desktop": [
+      {
+        "stem": "recovery-workbench-desktop-960",
+        "width": 960,
+        "height": 255
+      },
+      {
+        "stem": "recovery-workbench-desktop-1600",
+        "width": 1600,
+        "height": 424
+      },
+      {
+        "stem": "recovery-workbench-desktop-2036",
+        "width": 2036,
+        "height": 540
+      }
+    ]
+  },
+  "recovery-1": {
+    "desktop": [
+      {
+        "stem": "recovery-1-desktop-480",
+        "width": 480,
+        "height": 396
+      },
+      {
+        "stem": "recovery-1-desktop-570",
+        "width": 570,
+        "height": 470
+      }
+    ]
+  },
+  "recovery-2": {
+    "desktop": [
+      {
+        "stem": "recovery-2-desktop-440",
+        "width": 440,
+        "height": 470
+      }
+    ]
+  },
+  "recovery-3": {
+    "desktop": [
+      {
+        "stem": "recovery-3-desktop-455",
+        "width": 455,
+        "height": 470
+      }
+    ]
+  },
+  "recovery-4": {
+    "desktop": [
+      {
+        "stem": "recovery-4-desktop-480",
+        "width": 480,
+        "height": 407
+      },
+      {
+        "stem": "recovery-4-desktop-566",
+        "width": 566,
+        "height": 480
+      }
+    ]
+  },
+  "devices-platform": {
+    "desktop": [
+      {
+        "stem": "devices-platform-desktop-960",
+        "width": 960,
+        "height": 480
+      },
+      {
+        "stem": "devices-platform-desktop-1440",
+        "width": 1440,
+        "height": 720
+      },
+      {
+        "stem": "devices-platform-desktop-1774",
+        "width": 1774,
+        "height": 887
+      }
+    ]
+  },
+  "closing-resting-fox": {
+    "desktop": [
+      {
+        "stem": "closing-resting-fox-desktop-960",
+        "width": 960,
+        "height": 400
+      },
+      {
+        "stem": "closing-resting-fox-desktop-1440",
+        "width": 1440,
+        "height": 600
+      },
+      {
+        "stem": "closing-resting-fox-desktop-1942",
+        "width": 1942,
+        "height": 809
+      }
+    ],
+    "mobile": [
+      {
+        "stem": "closing-resting-fox-mobile-480",
+        "width": 480,
+        "height": 400
+      },
+      {
+        "stem": "closing-resting-fox-mobile-768",
+        "width": 768,
+        "height": 639
+      }
+    ]
+  },
+  "photo-lake": {
+    "desktop": [
+      {
+        "stem": "photo-lake-desktop-210",
+        "width": 210,
+        "height": 175
+      }
+    ]
+  },
+  "photo-coast": {
+    "desktop": [
+      {
+        "stem": "photo-coast-desktop-150",
+        "width": 150,
+        "height": 112
+      }
+    ]
+  },
+  "photo-garden": {
+    "desktop": [
+      {
+        "stem": "photo-garden-desktop-120",
+        "width": 120,
+        "height": 82
+      }
+    ]
+  },
+  "privacy-edge": {
+    "desktop": [
+      {
+        "stem": "privacy-edge-desktop-274",
+        "width": 274,
+        "height": 887
+      }
+    ]
+  }
+}

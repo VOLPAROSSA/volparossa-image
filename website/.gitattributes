@@ -1,0 +1,3 @@
+# Preserve exact upstream source bytes and their original notices.
+vendor/** -text whitespace=-blank-at-eol,-blank-at-eof,-cr-at-eol
+assets/icons/lucide/** -text whitespace=-blank-at-eol,-blank-at-eof,-cr-at-eol

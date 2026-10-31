@@ -1,0 +1,12 @@
+{
+  "source_archive": "VOLPAROSSA-IMAGE-LANTERN-MOSAIC-BUILD-BRIEF.zip",
+  "selection": "concept 5 hero only; concept 6 body",
+  "files": {
+    "ASSET-BRIEF.txt": "63800b0ea3d8b955685b85a229fb354479a6417f2bebc7dbe4ed03e4381304d5",
+    "BUILD-INSTRUCTIONS.txt": "c6238604285b3e8047f7a2cdc1cc45dbb03c0abb3e6358ec6b4ae93d384a5fe3",
+    "references/01-image-mosaic-BODY-SELECTED.png": "6d3debd91aef44aa00c6eeb5d6e34e6777ad761f55ddb6fa2c1bdf336ed14451",
+    "references/02-image-lantern-HERO-ONLY.png": "741de974754266a91f06ce87329eeb5b6a727977ee4e1612d5a955b5253cc25f",
+    "references/04-core-golden-harbour-STYLE-ONLY.png": "503577d96d3e17782dddf03147954798287931dd47c3d6ccd0e49aea6bae4457",
+    "references/03-volparossa-original-logo.png": "4c5a9aaa0ed869489400b4f5010fd9498d81cc7f0bedab28742945ba0fb1a99a"
+  }
+}

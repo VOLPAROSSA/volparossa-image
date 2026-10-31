@@ -1,0 +1,44 @@
+[
+  {
+    "name": "hero-lantern",
+    "prompt": "Create ONE clean cinematic landscape website hero image, approximately 2:1. Use ONLY the FIRST/HERO section of attached Lantern concept 5 as the close composition and materials reference, not the rest of that website. Rebuild it as a standalone clean illustration with NO TEXT and no interface. Deep burgundy photography studio, walnut tabletop, velvet curtains. Leftmost 38% quiet dark burgundy shadow for separately overlaid HTML. At x=56% a beautiful calm anatomically natural red fox sits beside an elaborate antique brass magic-lantern projector at x=72%. The projector lens points RIGHT and casts warm golden light towards landscape photographic projections on the right wall. Fox and projector are large, complete and sharply defined; full natural body with two plausible front legs, no extra limbs, a SINGLE tail curled to the left. Warm coastal and alpine landscapes projected on wall, a few tactile photo prints on the desk. Match the elegance, close camera, cinematic scale and warm light of the selected hero. Do NOT include photo-tile fox, harbour stage props, navigation, titles, logos, buttons, pseudo text, UI, watermarks or collaged website sections. Output just the artwork.",
+    "generated_path": "/workspace/generated_images/exec-fcad97ce-9481-407c-8bdd-59945ec36b54.png",
+    "date": "2026-10-31",
+    "reference": "02-image-lantern-HERO-ONLY.png"
+  },
+  {
+    "name": "library-table",
+    "prompt": "Create ONE standalone WIDE 2:1 clean still-life illustration matching the LIGHT library table section of attached concept 6 (the section below the Immich monitor). Do not reproduce a website. Warm ivory cream photography worktable, soft sunlight and foliage at far outer edges. Three distinct equally spaced groups across the LOWER two thirds of the entire width: left stack of landscape photo prints with fine white borders, CENTER a large open photographic album showing a beautiful alpine lake photo on the left and simple completely UNLETTERED blank index cards on the right, RIGHT a separate closed dark brown leather recovery folio with a separate brass key lying in front. Clear breathing space between the album and the owner's recovery folio. Top quarter light ivory mostly empty atmosphere to blend behind separately rendered text. Elegant painterly photographic realism, rich tactile paper and leather, close camera, like the exact LIGHT table in concept6. No readable text, pseudoletters, numbers, codes, UI, logos, labels, arrows, no fox or projector. These are three physical owner-side objects, not a network diagram.",
+    "generated_path": "/workspace/generated_images/exec-04b522db-beff-4368-9481-69609be5b10d.png",
+    "date": "2026-10-31",
+    "reference": "01-image-mosaic-BODY-SELECTED.png"
+  },
+  {
+    "name": "recovery-workbench",
+    "prompt": "Create ONE standalone VERY WIDE landscape clean dark photography workbench illustration, 2:1 or wider, matching the dark burgundy FOUR-STEPS section in attached Mosaic concept6. One continuous walnut table with burgundy curtain backdrop. Four object groups evenly spaced, all complete with ample gaps, clear centers at 12%,37%,62%,87% horizontal width. 1 left: open photographic album with a landscape and blank unlettered index page plus small stack of landscape prints. 2: closed OPAQUE ornate brass archive box, a separate brass key in front of THIS OWNER'S box; no transparent content. 3: a cluster of small CLOSED opaque archive parcels/boxes of different sizes, brown/black/brass, no visible content or photos and no keys. 4 right: a retrieved CLOSED archive case next to a NEW open landscape photo album and a few prints, representing subsequent LOCAL opening. Keep objects mostly in bottom two thirds, top third quiet dark burgundy for HTML labels placed separately. Photorealistic painterly warm lighting, restrained golden reflections, rich craftsmanship matching exactly the attached dark workbench. No text, letters, numbers, arrows, logos, pseudo writing, UI, transparent boxes, glowing data, or keys attached to parcels. Output only artwork, not a webpage.",
+    "generated_path": "/workspace/generated_images/exec-23aee002-afb9-4ac6-b316-cab6a63aed52.png",
+    "date": "2026-10-31",
+    "reference": "01-image-mosaic-BODY-SELECTED.png"
+  },
+  {
+    "name": "closing-resting-fox",
+    "prompt": "Create ONE clean cinematic wide 2.4:1 website closing panorama, using ONLY the LAST SCENE ABOVE THE FOOTER of attached Mosaic concept6 as a very close reference. A natural red fox resting on the RIGHT on a walnut photography table among tactile landscape photo prints, its head lowered resting on its paws facing the viewer, calm and peaceful, natural anatomy. Exactly one single body/tail, no extra limbs. The fox has large finely detailed ears and warm reddish fur, warm golden light from a desk lamp. Deep burgundy curtain shadows in the left HALF, very quiet and dark for separately rendered HTML text. Small landscape prints scattered naturally along the bottom. Restrained foliage at outer right edge, warm photorealistic painterly realism. Match the reference fox expression and close camera. No projector, no photo-tile fox, no harbour, no text, typography, UI, buttons, logos or watermarks. Only clean standalone artwork.",
+    "generated_path": "/workspace/generated_images/exec-7e0408d2-30d3-4bac-a2b0-5062120f5877.png",
+    "date": "2026-10-31",
+    "reference": "01-image-mosaic-BODY-SELECTED.png"
+  },
+  {
+    "name": "immich-photo-surround",
+    "prompt": "Create ONE clean wide decorative background image for the FIRST LIGHT IVORY body section of attached Mosaic concept6, the section with a large monitor. Only create the BACKGROUND and decorative photo prints: DO NOT DRAW ANY MONITOR, SCREEN, DEVICE, UI OR TEXT. Left 38% is warm light ivory paper with virtually no objects for HTML copy. Right 62% has an ample EMPTY rectangular ivory center where a real screenshot will later be composited, with a few realistic landscape photo prints fanned along ONLY the OUTER TOP, RIGHT and BOTTOM edges, an antique small camera near bottom left of the empty rectangle, tiny green leaves at upper right. Prints show invented alpine lakes, sunlit coast, flowers; no private people. Warm natural daylight, tactile paper, soft shadows, photographic craft. Clean cream center, matching the luxurious light setting around the large Immich screen in the attached design. No product interface, text, letters, buttons, logos, fox, projector, pseudo-UI or watermark. Standalone artwork only, 2:1 landscape.",
+    "generated_path": "/workspace/generated_images/exec-d32b8cfa-6f07-40a0-96a9-9d829e49ff1b.png",
+    "date": "2026-10-31",
+    "reference": "01-image-mosaic-BODY-SELECTED.png"
+  },
+  {
+    "name": "devices-platform",
+    "prompt": "Create ONE clean wide 2:1 landscape still-life, matching ONLY the LIGHT DEVICE SECTION of attached concept6: a pale warm natural-stone platform and sunlit ivory photography studio. Leftmost 38% clean nearly empty cream/light background reserved for later HTML text. On right 62%, three realistic unbranded devices arranged left to right: one upright smartphone, one upright portrait tablet, one open laptop. Screen front faces as frontal and rectangular as possible with MINIMAL perspective so separately composited imagery can fit cleanly. ALL SCREENS MUST BE COMPLETELY BLANK uniform dark charcoal, no reflections, text, symbols or photos. Each full device is clearly visible, not hidden by another. Laptop has natural keyboard below screen. Keep equal bottom baseline on stone tabletop, soft warm light, subtle foliage at far edges and one or two landscape prints at far right. Devices occupy lower 75% of frame. Elegant realistic painterly detail consistent with the reference. No text, no UI, no buttons, no logos, no download badges, no fox or projector. Clean standalone art, not a website.",
+    "generated_path": "/workspace/generated_images/exec-f3868eb1-a185-429b-a9f6-4cedbb6ac071.png",
+    "date": "2026-10-31",
+    "reference": "01-image-mosaic-BODY-SELECTED.png"
+  }
+]
