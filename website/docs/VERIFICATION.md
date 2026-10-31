@@ -108,3 +108,26 @@ hosted checks, merge and dispatch the production workflow, compare live HTML and
 loaded asset bytes, and inspect live desktop/mobile renders. Enable the central
 Image product link only after that verification. The PR records actual release
 runs and live observations; this source report records the prepublication checks.
+
+## Second-section background alignment correction
+
+After publication, a Firefox screenshot showed the photo surround as an inset
+rectangle, with its lower edge reaching the three explanation columns. The
+background now uses the desktop section grid as its containing block, starts at
+the section's top and reaches the viewport's right edge. Left and bottom masks
+blend it into the paper; it ends before the explanation row. On tablet/mobile,
+the surround remains local to the screenshot, reaches both viewport edges and
+fades above/below it. The screenshot, attribution and copy remain unchanged.
+
+Re-ran the 13 Chromium/Firefox profiles, including 320–2560px, no-JS, enlarged
+text, reflow and image failure; all pass. Axe reports zero violations at 390 and
+1440px. Preview and production artifact checks pass; production HTML/CSS/JS gzip
+is 18,926 bytes. Firefox section renders were visually inspected at 390, 768,
+1440, 1920 and 2560px. Desktop artwork aligns with the section top/right edge;
+its bottom remains 16px above the role row, with no horizontal page overflow.
+No new artwork, network assets, runtime behavior or shared-theme files changed.
+
+[Mobile correction](../review/background-alignment/firefox-390.webp) ·
+[Desktop correction](../review/background-alignment/firefox-1440.webp) ·
+[Wide desktop correction](../review/background-alignment/firefox-2560.webp) ·
+[Browser results](../review/background-alignment/browser-results.json)
