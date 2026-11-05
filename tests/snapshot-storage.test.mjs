@@ -77,6 +77,50 @@ test('create and deposit take only the exact receipt-verified snapshot.pgp, neve
   assert.ok(!JSON.stringify(deposited).includes(f.root));
 });
 
+test('thin maintenance CLI requires explicit finite policy or existing enrollment and no recovery key', async t => {
+  const f = await setup(t);
+  await rm(f.bundle, { recursive: true });
+  const policy = join(f.root, 'finite-maintenance.json');
+  const request = { enrollment: join(f.root, 'maintenance'), fromProviderKey: '11'.repeat(32),
+    providers: [{ key: '22'.repeat(32), grant: join(f.root, 'grant') }], authorizationSeconds: 600,
+    lifetimeSeconds: 300, renewBeforeSeconds: 60, maximumChargedBytes: 1024, maximumTurnBytes: 1048576 };
+  await writeFile(policy, JSON.stringify(request), { mode: 0o600 });
+  let closed = 0;
+  f.fake.close = async () => { closed++; };
+  f.fake.enrollMaintenance = async (value, options) => {
+    assert.deepEqual(value, request); assert.ok(!options.signal?.aborted);
+    return { status: 'complete', local_process_joined: true };
+  };
+  f.fake.maintenanceStatus = async value => {
+    assert.deepEqual(value, { enrollment: request.enrollment });
+    return { status: 'complete', owned_process_running: false };
+  };
+  f.fake.startMaintenance = async (value, options) => {
+    assert.deepEqual(value, { enrollment: request.enrollment, maximumTurns: 8 });
+    return { done: new Promise(resolve => {
+      const stopped = () => resolve({ status: 'stopped', code: 'cancelled', local_process_joined: true });
+      options.signal.addEventListener('abort', stopped, { once: true });
+      if (options.signal.aborted) stopped();
+    }) };
+  };
+  const enrolled = await runSnapshotStorage(parseArguments(['maintenance-enroll', '--config', f.configPath, '--policy', policy]), f);
+  assert.equal(enrolled.snapshot_decrypted, false);
+  assert.equal(enrolled.immich_restore_proven, false);
+  await runSnapshotStorage(parseArguments(['maintenance-status', '--config', f.configPath, '--enrollment', request.enrollment]), f);
+  const owner = new AbortController();
+  const serving = runSnapshotStorage(parseArguments(['maintenance-serve', '--config', f.configPath,
+    '--enrollment', request.enrollment, '--maximum-turns', '8']), { ...f, signal: owner.signal });
+  // Real async caller cancellation; no core or network process in this thin-dispatch test.
+  setTimeout(() => owner.abort(), 20);
+  assert.equal((await serving).code, 'cancelled');
+  assert.equal(closed, 3);
+  assert.equal(f.calls.length, 0);
+  for (const args of [[], ['--maximum-turns', '0'], ['--maximum-turns', '4097'], ['--policy', policy]]) {
+    if (!args.length) assert.throws(() => parseArguments(['maintenance-serve', '--config', f.configPath]));
+    else assert.throws(() => parseArguments(['maintenance-serve', '--config', f.configPath, '--enrollment', request.enrollment, ...args]));
+  }
+});
+
 test('interrupted deposit resumes on identical input/config without recreating journal', async t => {
   const f = await setup(t);
   await runSnapshotStorage({ ...f.options('create'), bundle: f.bundle }, f);
