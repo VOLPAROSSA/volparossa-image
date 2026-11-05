@@ -1144,8 +1144,8 @@ test('maintenance owns a real child while status stays distinct from stale check
 test('same-fd enrollment growth is rejected before allocating beyond the bounded JSON record', async t => {
   const f = await maintenanceFixture(t);
   const enrollmentFile = join(f.enrollment, 'enrollment.json');
-  const inode = (await lstat(enrollmentFile)).ino;
   const handle = await open(enrollmentFile, 'r');
+  const inode = (await handle.stat()).ino;
   const prototype = Object.getPrototypeOf(handle);
   await handle.close();
   const originalStat = prototype.stat;
