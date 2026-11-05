@@ -1,3 +1,5 @@
+# Propose related compatible updates together; every group still needs review.
+# Major upgrades remain individual; existing security-update policies stay separate.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -7,6 +9,13 @@ updates:
       day: monday
     open-pull-requests-limit: 3
     groups:
+      actions-compatible:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
       volparossa-security:
         applies-to: security-updates
         patterns:
