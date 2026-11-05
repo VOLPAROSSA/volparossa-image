@@ -1,0 +1,16 @@
+{
+  "name": "volparossa-image-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional browser QA tools; building and serving the site require only Python 3.",
+  "scripts": {
+    "build": "python3 scripts/build_site.py",
+    "check": "python3 scripts/check_site.py",
+    "qa": "node scripts/browser_check.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "lighthouse": "13.6.0",
+    "playwright": "1.62.1"
+  }
+}

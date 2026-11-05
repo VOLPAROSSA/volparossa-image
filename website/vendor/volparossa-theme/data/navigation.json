@@ -1,0 +1,27 @@
+{
+  "paths": {
+    "home": "",
+    "docs": "docs/",
+    "applications": "applications/",
+    "contribute": "contribute/",
+    "privacy": "privacy/",
+    "accessibility": "accessibility/",
+    "credits": "credits/"
+  },
+  "github": "https://github.com/VOLPAROSSA",
+  "main": [
+    {"key": "discover", "label": "Discover"},
+    {"key": "core", "label": "Core"},
+    {"key": "applications", "label": "Applications"},
+    {"key": "docs", "label": "Documentation"},
+    {"key": "contribute", "label": "Get involved"},
+    {"key": "github", "label": "GitHub"}
+  ],
+  "footer": [
+    {"key": "core", "label": "Core"},
+    {"key": "docs", "label": "Documentation"},
+    {"key": "applications", "label": "Applications"},
+    {"key": "contribute", "label": "Get involved"},
+    {"key": "github", "label": "GitHub"}
+  ]
+}

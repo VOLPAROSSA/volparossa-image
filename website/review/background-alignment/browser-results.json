@@ -1,0 +1,289 @@
+{
+  "checkedAt": "2026-10-31T20:50:23.644Z",
+  "url": "http://127.0.0.1:8776/volparossa-image/",
+  "results": [
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 320,
+      "height": 740,
+      "initialTransfer": 290940,
+      "images": 296454,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 390,
+      "height": 844,
+      "initialTransfer": 290940,
+      "images": 296454,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 768,
+      "height": 1024,
+      "initialTransfer": 328227,
+      "images": 327047,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 1440,
+      "height": 900,
+      "initialTransfer": 461611,
+      "images": 441992,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 1920,
+      "height": 1080,
+      "initialTransfer": 507511,
+      "images": 551544,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "chromium",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 844,
+      "height": 390,
+      "initialTransfer": 348171,
+      "images": 286349,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "type": "no-js",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 390,
+      "height": 900,
+      "passed": true
+    },
+    {
+      "type": "text-200-percent",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 1440,
+      "height": 900,
+      "passed": true
+    },
+    {
+      "type": "zoom-400-percent",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 360,
+      "height": 225,
+      "passed": true
+    },
+    {
+      "type": "images-disabled",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [
+        "http://127.0.0.1:8776/volparossa-image/assets/logo.png",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/hero-lantern-mobile-480.avif",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/immich-photo-surround-mobile-480.avif",
+        "http://127.0.0.1:8776/volparossa-image/assets/upstream/image-screen.webp",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/image/photo-coast-desktop-150.webp",
+        "",
+        "",
+        "http://127.0.0.1:8776/volparossa-image/assets/logo.png"
+      ],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 390,
+      "height": 900,
+      "passed": true
+    },
+    {
+      "engine": "firefox",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 390,
+      "height": 844,
+      "initialTransfer": 290940,
+      "images": 290866,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "firefox",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 1440,
+      "height": 900,
+      "initialTransfer": 403348,
+      "images": 436404,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    },
+    {
+      "engine": "firefox",
+      "overflow": false,
+      "headerOverlap": false,
+      "missingImages": [],
+      "steps": [
+        "Prepare a snapshot",
+        "Encrypt before sharing",
+        "Store across participants",
+        "Retrieve and restore"
+      ],
+      "width": 2560,
+      "height": 1440,
+      "initialTransfer": 428728,
+      "images": 545956,
+      "fonts": 47140,
+      "errors": [],
+      "failures": [],
+      "external": []
+    }
+  ],
+  "accessibility": [
+    {
+      "width": 390,
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "violations": []
+    }
+  ]
+}

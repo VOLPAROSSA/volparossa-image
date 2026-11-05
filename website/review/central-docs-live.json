@@ -1,0 +1,29 @@
+{
+  "liveDocsMatches": true,
+  "links": [
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/README.md",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/SNAPSHOT.md",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/STORAGE_BRIDGE.md",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/SNAPSHOT_STORAGE.md",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/CLIENT_INTEGRATION.md",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/VOLPAROSSA/volparossa-image/blob/main/docs/UPSTREAM.md",
+      "status": 200
+    }
+  ]
+}
