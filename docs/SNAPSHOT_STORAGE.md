@@ -118,12 +118,34 @@ hashes. Validation failures use closed codes. `--help` performs no core operatio
 node --test tests/snapshot-storage.test.mjs tests/core-storage.test.mjs
 ```
 
-The orchestration tests use real private local files and **fabricated storage
-contract responses**, not actual peer storage or GnuPG encryption of those dummy bytes.
-They cover receipt/cipher binding, fragment bounds, unchanged retry state,
-operation dispatch, non-overwriting source-independent retrieval, separate key
-supply and failure/cancellation semantics. The actual synthetic GnuPG tests are
-documented separately in [SNAPSHOT.md](SNAPSHOT.md). A combined real core/peer
-deposit–retrieve–decrypt proof is still required, followed by a running restored
-Immich instance. This CLI proves neither mobile integration nor operation without
-an always-on personal server.
+The orchestration tests use private local files and synthetic storage responses.
+They cover receipt binding, fragment bounds, non-overwriting retrieval, retries,
+cancellation and separate owner-key supply. The archive tests also exercise GnuPG
+integrity and failure handling. [Local archive checks](SNAPSHOT.md)
+
+### Joined Immich recovery
+
+On 18 November 2026, one hosted run deposited a quiesced Immich PostgreSQL
+backup and its media as encrypted fragments on three authenticated providers
+inside one disposable Debian VM. The trial removed the source application and the original ciphertext and took one provider
+offline. The two surviving providers recovered the same 51,283 encrypted bytes
+twice. The owner supplied the separate key, restored into an empty database and
+started a fresh Immich instance. A new login retrieved the original 8,516-byte
+PNG in its private album. Anonymous access was denied. Cleanup deleted all eight
+provider copies and left zero provider usage. The guest joined and its private
+state, Docker resources and host scratch were removed.
+[Hosted trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/44411540175) ·
+[Retained application and transport receipts](https://github.com/VOLPAROSSA/volparossa/tree/a0838bda85ba1e4ad332b9cc4d5bcf77c411349f/docs/development/evidence/immich-peer-44411540175)
+
+| Source or artifact | Exact revision or SHA-256 |
+| --- | --- |
+| Core | `46f5c2c98f49eeda1816517530961f2d8090657c` |
+| Image producer and receiver | `ce16debc9277bdf80fa76c373746e3d502fc96fb` |
+| Image bridge provisioned in the guest | `0da0c35e9372a828553f376c3eb404a6081e0bb8` |
+| Immich 3.2.4 | `db355f79d910bbfc6378117ed10868493c97b922` |
+| Recovered ciphertext | `9844bda3a694eda5d51579e8adff510193b68b1fd29516599b44bbc67595d24b` |
+| ZIP containing the two public receipts | `f467c00dfa0aa8036e52106d85961c67dc530ba53c39ce4b8e7d71a619036478` |
+
+The run covers a single recovery after one provider withdrawal. Persistent service
+availability, mobile synchronization, unattended repair and private background
+processing still require sustained application trials.
