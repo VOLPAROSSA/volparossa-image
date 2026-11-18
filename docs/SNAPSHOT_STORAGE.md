@@ -134,7 +134,8 @@ started a fresh Immich instance. A new login retrieved the original 8,516-byte
 PNG in its private album. Anonymous access was denied. Cleanup deleted all eight
 provider copies and left zero provider usage. The guest joined and its private
 state, Docker resources and host scratch were removed.
-[Hosted run and both receipts](https://github.com/VOLPAROSSA/volparossa/actions/runs/44411540175)
+[Hosted trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/44411540175) ·
+[Retained application and transport receipts](https://github.com/VOLPAROSSA/volparossa/tree/a0838bda85ba1e4ad332b9cc4d5bcf77c411349f/docs/development/evidence/immich-peer-44411540175)
 
 | Source or artifact | Exact revision or SHA-256 |
 | --- | --- |
