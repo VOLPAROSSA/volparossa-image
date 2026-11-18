@@ -135,9 +135,13 @@ non-consuming restores, wrong-key rejection, ciphertext corruption including a r
 external hash, source mutation, overwrite/link/traversal/resource rejection, owner-only modes
 and exact child/runtime cleanup. No personal photos or live database are used.
 
-Peer storage durability, redundant fragment recovery, original Immich database import,
-mobile sync, native UI and server-independent operation require their own real integration
-proofs. This local archive result does not complete any of those paths.
+In the separate application trial, a synthetic owner uploaded an 8,516-byte PNG
+through the Immich API and added it to a private album. The trial stopped the
+source application before dumping PostgreSQL and copying its media. After peer
+recovery, it restored the dump into an empty PostgreSQL database and the media
+into a fresh volume. A new authenticated client verified the owner identity,
+album membership and original bytes. An anonymous download was denied.
+[Joined recovery evidence](SNAPSHOT_STORAGE.md#joined-immich-recovery)
 
 Primary implementation references:
 [GnuPG 2.4.7 foreground socket activation](https://github.com/gpg/gnupg/blob/gnupg-2.4.7/agent/gpg-agent.c),
