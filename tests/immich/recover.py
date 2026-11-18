@@ -182,6 +182,7 @@ def trial(root, source, receiver, report):
     created = snapshot("create", "--source", prepared, "--output", bundle, "--quiesced-copy")
     check(created["encryption"] == "OpenPGP-AES256" and re.fullmatch(
         r"[0-9a-f]{64}", created["cipher_sha256"]), "encryption")
+    report.update(cipher_bytes=created["cipher_bytes"], cipher_sha256=created["cipher_sha256"])
     delivery = root / "received"
     delivery.mkdir(mode=0o700)
     shutil.copyfile(bundle / "snapshot.pgp", delivery / "snapshot.pgp")
@@ -219,13 +220,15 @@ def trial(root, source, receiver, report):
     receiver.compose(*sql, "--single-transaction", stdin=dump, timeout=120)
     report.update(empty_postgres_verified=True, postgres_restore_completed=True)
 
-    stage("fresh_recovered_owner_read")
-    receiver.compose("create", "--no-deps", "--pull", "never", "server")
+    stage("install_recovered_media")
+    receiver.compose("create", "--pull", "never", "server")
     recovered_server = receiver.container("server")
     for folder in sorted(FOLDERS):
         command(["docker", "cp", str(recovered / folder), recovered_server + ":/data/"])
+    stage("start_recovered_server")
     receiver.compose("start", "server")
     receiver.no_public_ports()
+    stage("fresh_recovered_owner_read")
     observed = receiver.client({**inputs, "seed": False, "expected": expected})
     check(observed == expected, "recovered_asset")
     report.update(fresh_owner_login=True, owner_identity_preserved=True, album_membership_preserved=True,
