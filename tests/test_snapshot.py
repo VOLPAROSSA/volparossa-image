@@ -6,11 +6,13 @@ import gzip
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -73,6 +75,51 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(original, restored)
         self.assertEqual((self.bundle / "snapshot.pgp").read_bytes(), cipher)
         self.assertTrue((self.source / "library/owner/synthetic.bin").exists())
+
+    def test_cli_restores_from_separately_retained_key(self):
+        receipt = self.create()
+        vault = self.root / "keys"
+        vault.mkdir(mode=0o700)
+        key = (self.bundle / "recovery.key").rename(vault / "owner.key")
+        output = self.root / "restored"
+        cli = [sys.executable, str(ROOT / "scripts/immich_snapshot.py"), "restore",
+               "--bundle", str(self.bundle), "--recovery-key-file", str(key),
+               "--expected-sha256", receipt["cipher_sha256"], "--output", str(output)]
+        run = subprocess.run(cli, capture_output=True, check=True, timeout=30)
+        self.assertTrue(json.loads(run.stdout)["manifest_verified"])
+        self.assertEqual((output / "library/owner/synthetic.bin").read_bytes(),
+                         (self.source / "library/owner/synthetic.bin").read_bytes())
+        self.assertEqual(sorted(p.name for p in self.bundle.iterdir()), ["receipt.json", "snapshot.pgp"])
+        self.assertTrue(key.is_file())
+        self.assertNotIn(key.read_bytes().strip(), run.stdout + run.stderr)
+
+    def test_explicit_key_refuses_shared_directory_links_and_wrong_key(self):
+        receipt = self.create()
+        original = self.bundle / "recovery.key"
+        vault = self.root / "keys"
+        vault.mkdir(mode=0o700)
+        selected = vault / "copy.key"
+        output = self.root / "restored"
+
+        def refused():
+            with self.assertRaises((SNAPSHOT.SnapshotError, OSError)):
+                SNAPSHOT.restore(self.bundle, output, expected_sha256=receipt["cipher_sha256"],
+                                 recovery_key_file=selected, timeout_seconds=20)
+            self.assertFalse(output.exists())
+
+        selected.symlink_to(original)
+        refused()
+        selected.unlink()
+        os.link(original, selected)
+        refused()
+        selected.unlink()
+        selected.write_bytes(original.read_bytes())
+        selected.chmod(0o600)
+        vault.chmod(0o755)
+        refused()
+        vault.chmod(0o700)
+        selected.write_bytes(b"0" * 64 + b"\n")
+        refused()  # The valid key beside the ciphertext cannot override the owner's explicit choice.
 
     def test_wrong_key_and_corruption_do_not_publish(self):
         receipt = self.create()
