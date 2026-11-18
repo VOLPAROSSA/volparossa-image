@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from peer import PeerError, exact_transport, returned_cipher, unique_pairs
+from peer import PeerError, exact_transport, returned_cipher, source_cipher_removed, unique_pairs
 
 
 class BindingTests(unittest.TestCase):
@@ -27,6 +27,20 @@ class BindingTests(unittest.TestCase):
             exact_transport(receipt | {"unknown": True}, bindings)
         with self.assertRaises(PeerError):
             unique_pairs([("version", 2), ("version", 1)])
+
+    def test_source_archive_must_be_removed_before_recovery(self):
+        with tempfile.TemporaryDirectory() as private:
+            folder = Path(private)
+            receipt = folder / "receipt.json"
+            receipt.touch(mode=0o600)
+            (folder / "snapshot.pgp").touch(mode=0o600)
+            with self.assertRaises(PeerError):
+                source_cipher_removed(folder)
+            (folder / "snapshot.pgp").unlink()
+            source_cipher_removed(folder)
+            receipt.chmod(0o644)
+            with self.assertRaises(PeerError):
+                source_cipher_removed(folder)
 
     def test_receiver_has_only_private_exact_independent_file(self):
         with tempfile.TemporaryDirectory() as private:

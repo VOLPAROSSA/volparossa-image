@@ -43,6 +43,13 @@ def exact_transport(receipt, bindings):
             "transport_binding")
 
 
+def source_cipher_removed(folder):
+    require({p.name for p in folder.iterdir()} == {"receipt.json"}, "source_cipher_still_present")
+    info = (folder / "receipt.json").lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o600, "source_receipt_file")
+
+
 def returned_cipher(folder, count, sha):
     require([p.name for p in folder.iterdir()] == ["snapshot.pgp"], "unexpected_received_files")
     path = folder / "snapshot.pgp"
@@ -97,4 +104,5 @@ class PeerTransport:
             require(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 4096, "transport_receipt_size")
             receipt = json.loads(stream.read(4097), object_pairs_hook=unique_pairs)
         exact_transport(receipt, bindings)
+        source_cipher_removed(bundle)
         return bindings

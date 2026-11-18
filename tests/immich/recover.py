@@ -204,9 +204,8 @@ def trial(root, source, receiver, report, peer):
         bindings = peer.transfer(bundle, delivery, created)
         report.update(**bindings, peer_storage_exercised=True, peer_transport_verified=True)
     returned_cipher(delivery, created["cipher_bytes"], created["cipher_sha256"])
-    # Core may also remove its original copy. The received archive is the only input to recovery.
-    if bundle.exists():
-        shutil.rmtree(bundle)
+    # After local handoff discard the source archive. Core already removed its source ciphertext.
+    shutil.rmtree(bundle)
     report["received_ciphertext_only"] = True
 
     stage("owner_snapshot_restore")
