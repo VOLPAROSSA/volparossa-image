@@ -1,0 +1,51 @@
+# Synthetic restore fixture for the release in upstream.lock.json. No host ports.
+x-server: &server ghcr.io/immich-app/immich-server@sha256:04225d8995a221de3b73a6131fe25eed14448830e54998f30877a70f48c6ac13
+services:
+  server:
+    image: *server
+    platform: linux/amd64
+    environment:
+      DB_HOSTNAME: database
+      DB_USERNAME: postgres
+      DB_DATABASE_NAME: immich
+      DB_PASSWORD: ${IMAGE_TRIAL_DB_PASSWORD:?}
+      REDIS_HOSTNAME: redis
+      IMMICH_MACHINE_LEARNING_ENABLED: 'false'
+    volumes:
+      - media:/data
+    mem_limit: 3g
+  database:
+    image: ghcr.io/immich-app/postgres@sha256:b1d33572a9a0634aa6d344077467ad32847812a37fa3859f702952cba22a2f55
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: immich
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${IMAGE_TRIAL_DB_PASSWORD:?}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - database:/var/lib/postgresql/data
+    shm_size: 128mb
+    mem_limit: 2g
+  redis:
+    image: docker.io/valkey/valkey@sha256:c7f03d95d897f97eef7ec2d4a6a1e2c0cbe62a36a56b00f304aa536cbe3ec9c1
+    platform: linux/amd64
+    volumes:
+      - redis:/data
+    mem_limit: 256m
+  client:
+    image: *server
+    platform: linux/amd64
+    entrypoint: ["node"]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/data]
+    mem_limit: 256m
+networks:
+  default:
+    internal: true
+volumes:
+  media:
+  database:
+  redis:
