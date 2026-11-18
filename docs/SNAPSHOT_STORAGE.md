@@ -79,13 +79,14 @@ complete hash against the retained receipt. Only successful verified retrieval
 adds `receipt.json` beside `snapshot.pgp`. The original local ciphertext may be
 absent. No `recovery.key` is copied and no decryption happens.
 
-The owner then supplies their independently retained `recovery.key` to this new
-private bundle, without overwriting an existing file, and invokes the separate
-snapshot decoder with the original receipt's expected hash:
+The owner points the snapshot decoder at the independently retained key and
+supplies the original receipt's expected hash. The recovered bundle contains
+just the ciphertext and its receipt.
 
 ```sh
 python3 scripts/immich_snapshot.py restore \
   --bundle /owner/private/new-recovered-bundle \
+  --recovery-key-file /owner/keys/immich.key \
   --expected-sha256 'OWNER_RETAINED_64_HEX_CIPHERTEXT_SHA256' \
   --output /owner/private/new-restored-copy
 ```

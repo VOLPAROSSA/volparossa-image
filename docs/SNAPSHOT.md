@@ -80,17 +80,21 @@ disabled, as much of the input is already compressed and expansion must remain b
 
 ## Restore without consuming or replacing anything
 
-Obtain `snapshot.pgp` and the private recovery key in an owner-only bundle directory. Supply
-the expected ciphertext SHA-256 from the owner or the authenticated core storage journal;
-do not treat an arbitrary fetched `receipt.json` as the trust anchor.
+Obtain `snapshot.pgp` in an owner-only bundle directory. Supply the expected
+ciphertext SHA-256 from the owner or the authenticated core storage journal.
+Use `--recovery-key-file` to read the owner's separately stored key directly.
+A bundle created locally can use its existing `recovery.key` by omitting the option.
 
 ```sh
 python3 scripts/immich_snapshot.py restore \
   --bundle /owner/private/recovered-bundle \
+  --recovery-key-file /owner/keys/immich.key \
   --expected-sha256 OWNER_VERIFIED_64_HEX_SHA256 \
   --output /owner/private/new-restored-copy
 ```
 
+The key must be a private, owner-held, single-link regular file in an owner-only
+directory. The decoder passes its contents to GnuPG through a private descriptor.
 The operation verifies the entire ciphertext hash before decryption, then checks standard
 GnuPG AES-256/MDC status and successful process exit. A bounded tar reader rejects links,
 special/extended records, unsafe paths, duplicate entries, over-limit data, mismatched
