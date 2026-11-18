@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Disposable real Immich application + owner snapshot restore. No public listener or peer archive."""
+"""Restore a real private Immich installation from a local or Core peer-recovered ciphertext."""
+import argparse
 import base64
 import gzip
 import hashlib
@@ -9,12 +10,15 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
 import time
 import zlib
+
+from peer import PeerError, PeerTransport, returned_cipher
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -126,7 +130,7 @@ def snapshot(operation, *args):
     return json.loads(raw)
 
 
-def trial(root, source, receiver, report):
+def trial(root, source, receiver, report, peer):
     def stage(name):
         report["stage"] = name
         print("Immich restore trial: " + name, flush=True)
@@ -185,17 +189,25 @@ def trial(root, source, receiver, report):
     report.update(cipher_bytes=created["cipher_bytes"], cipher_sha256=created["cipher_sha256"])
     delivery = root / "received"
     delivery.mkdir(mode=0o700)
-    shutil.copyfile(bundle / "snapshot.pgp", delivery / "snapshot.pgp")
-    (delivery / "snapshot.pgp").chmod(0o600)
-    check([p.name for p in delivery.iterdir()] == ["snapshot.pgp"], "ciphertext_only")
     key_dir = root / "owner-key"
     key_dir.mkdir(mode=0o700)
     key = (bundle / "recovery.key").rename(key_dir / "recovery.key")
     # Destroy only this synthetic source project, after the normal authenticated original read.
     source.clean()
     shutil.rmtree(prepared)
-    shutil.rmtree(bundle)
-    report.update(source_project_removed=True, received_ciphertext_only=True)
+    report["source_project_removed"] = True
+    stage("private_ciphertext_handoff")
+    if peer is None:
+        shutil.copyfile(bundle / "snapshot.pgp", delivery / "snapshot.pgp")
+        (delivery / "snapshot.pgp").chmod(0o600)
+    else:
+        bindings = peer.transfer(bundle, delivery, created)
+        report.update(**bindings, peer_storage_exercised=True, peer_transport_verified=True)
+    returned_cipher(delivery, created["cipher_bytes"], created["cipher_sha256"])
+    # Core may also remove its original copy. The received archive is the only input to recovery.
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    report["received_ciphertext_only"] = True
 
     stage("owner_snapshot_restore")
     recovered = root / "recovered"
@@ -236,6 +248,18 @@ def trial(root, source, receiver, report):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--core-checkout", type=Path)
+    parser.add_argument("--core-revision")
+    parser.add_argument("--image-revision")
+    args = parser.parse_args()
+    joined = args.core_checkout is not None
+    if any(value is not None for value in vars(args).values()) and not all(vars(args).values()):
+        parser.error("a joined proof requires the Core checkout and both exact source revisions")
+    def interrupt(_number, _frame):
+        raise Failure("trial_interrupted")
+
+    signal.signal(signal.SIGTERM, interrupt)
     os.umask(0o077)
     check(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT")
           == "github-hosted" and re.fullmatch(r"[0-9]+", os.environ.get("GITHUB_RUN_ID", "")),
@@ -245,12 +269,17 @@ def main():
     check(not evidence.exists(), "existing_report")
     prefix = "imageproof" + secrets.token_hex(6)
     source, receiver = Project(prefix, "source"), Project(prefix, "receiver")
-    report = dict(schema=1, status="failed", stage="prepare", image_revision=os.environ["GITHUB_SHA"],
+    report = dict(schema=1, status="failed", stage="prepare",
+                  proof_mode="core-peer" if joined else "local-ciphertext",
+                  image_revision=args.image_revision if joined else os.environ["GITHUB_SHA"],
                   peer_storage_exercised=False)
+    scratch = None
     try:
+        peer = PeerTransport(args.core_checkout, args.core_revision, REPO, args.image_revision,
+                             runner) if joined else None
         with tempfile.TemporaryDirectory(prefix="img-", dir=runner) as scratch:
             try:
-                trial(Path(scratch), source, receiver, report)
+                trial(Path(scratch), source, receiver, report, peer)
             finally:
                 for project in (receiver, source):
                     try:
@@ -260,8 +289,8 @@ def main():
         check(not report.get("cleanup_failed"), "docker_cleanup")
         report.update(stage="complete", status="passed")
     except (Failure, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
-        report["reason"] = str(error) if isinstance(error, Failure) else type(error).__name__
-    report["private_scratch_removed"] = not Path(scratch).exists()
+        report["reason"] = str(error) if isinstance(error, (Failure, PeerError)) else type(error).__name__
+    report["private_scratch_removed"] = scratch is None or not Path(scratch).exists()
     report["docker_resources_removed"] = not source.objects() and not receiver.objects()
     if not (report["private_scratch_removed"] and report["docker_resources_removed"]):
         report["status"] = "failed"
