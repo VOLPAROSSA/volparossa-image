@@ -1,7 +1,7 @@
 # VOLPAROSSA Image website
 
 The static Image page uses the Lantern hero from concept 5 and the Mosaic body
-from concept 6, with the shared VOLPAROSSA design 1.0.3. It describes the current
+from concept 6, with the shared VOLPAROSSA design 1.1.0. It describes the current
 private-snapshot integration honestly; it does not start Immich or Core.
 
 ## Build and review
@@ -62,7 +62,7 @@ Publication runs and live verification are recorded in the pull request.
 - [Verification report and screenshots](docs/VERIFICATION.md)
 
 The theme is a byte-verified source-only export from homepage commit
-`cebc20cd25f369da9bca2d6e80f972a63f7f27a8`. Never edit vendor files to update Image.
+`991cf1638c906226574b9c21bb32c6618fc07fb7`. Never edit vendor files to update Image.
 Keep Image composition changes in `src/image.css`. Re-export a new reviewed theme
 from the central repository if shared navigation or design changes are required.
 

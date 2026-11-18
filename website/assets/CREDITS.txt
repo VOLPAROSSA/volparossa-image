@@ -9,7 +9,7 @@ are retained in the source repository's website/ directory; only optimized
 exports are served to visitors.
 
 Immich: original mark and complete upstream tag-view screenshot, pinned through
-VOLPAROSSA/volparossa.github.io at cebc20cd25f369da9bca2d6e80f972a63f7f27a8.
+VOLPAROSSA/volparossa.github.io at 991cf1638c906226574b9c21bb32c6618fc07fb7.
 Original upstream: https://github.com/immich-app/immich
 Screenshot: docs/docs/features/img/tag-view.webp
 Mark: design/immich-logo.svg
@@ -18,7 +18,7 @@ This is an upstream example, not a completed VOLPAROSSA integration. Original
 brand display was requested by the owner. No endorsement or partnership is
 claimed; existing brand-use conditions remain in the source asset register.
 
-Shared theme: VOLPAROSSA design 1.0.3, exact source commit above. Original project
+Shared theme: VOLPAROSSA design 1.1.0, exact source commit above. Original project
 logo, fonts, header/footer and navigation remain unchanged. Font licenses are in
 fonts/. GitHub Octicons MIT notice is in icons/OCTICONS-LICENSE.txt.
 Local Lucide icons retain their original geometry and ISC license in
