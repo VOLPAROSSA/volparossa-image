@@ -126,8 +126,8 @@ integrity and failure handling. [Local archive checks](SNAPSHOT.md)
 ### Joined Immich recovery
 
 On 18 November 2026, one hosted run deposited a quiesced Immich PostgreSQL
-backup and its media as encrypted fragments on three providers. The trial
-removed the source application and the original ciphertext and took one provider
+backup and its media as encrypted fragments on three authenticated providers
+inside one disposable Debian VM. The trial removed the source application and the original ciphertext and took one provider
 offline. The two surviving providers recovered the same 51,283 encrypted bytes
 twice. The owner supplied the separate key, restored into an empty database and
 started a fresh Immich instance. A new login retrieved the original 8,516-byte
