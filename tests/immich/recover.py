@@ -36,9 +36,32 @@ def check(condition, code):
         raise Failure(code)
 
 
-def command(args, *, stdin=None, env=None, timeout=120):
+def pull_failure(output):
+    # Docker/Compose may include registry URLs, credentials or local paths. Only return a category.
+    message = output.lower()
+    categories = (
+        ("pull_disk_full", (b"no space left on device", b"disk quota exceeded")),
+        ("pull_daemon_unavailable", (b"cannot connect to the docker daemon", b"docker daemon socket")),
+        ("pull_rate_limited", (b"toomanyrequests", b"too many requests", b"429 too many")),
+        ("pull_denied", (b"unauthorized", b"access denied", b"denied:", b"forbidden",
+                         b"requested access to the resource is denied")),
+        ("pull_manifest_unavailable", (b"manifest unknown", b"manifest not found", b"no matching manifest",
+                                       b": not found", b"404 not found")),
+        ("pull_registry_transient", (b"service unavailable", b"bad gateway", b"gateway timeout",
+                                     b"internal server error", b"connection reset by peer", b"i/o timeout",
+                                     b"tls handshake timeout", b"temporary failure in name resolution")),
+    )
+    for code, signatures in categories:
+        if any(signature in message for signature in signatures):
+            return code
+    return "pull_other"
+
+
+def command(args, *, stdin=None, env=None, timeout=120, failure_code=None):
     result = subprocess.run(args, input=stdin, capture_output=True, timeout=timeout, env=env)
     if result.returncode:
+        if failure_code:
+            raise Failure(failure_code(result.stderr + result.stdout))
         # Only fixture-defined codes can leave the private runner. Never log raw API/SQL output.
         code = re.search(rb"TRIAL_API_[a-z_]+_[0-9]{1,3}", result.stderr)
         if code:
@@ -48,6 +71,22 @@ def command(args, *, stdin=None, env=None, timeout=120):
             raise Failure(code.group(1).decode())
         raise Failure(f"process_exit_{result.returncode}")
     return result.stdout
+
+
+def pull_release(source):
+    # A transient registry error can be retried on the same immutable images. Keep one total budget.
+    deadline = time.monotonic() + 420
+    for attempt in range(2):
+        try:
+            source.compose("pull", "--quiet", "server", "redis", "database",
+                           timeout=max(1, deadline - time.monotonic()), failure_code=pull_failure)
+            return
+        except subprocess.TimeoutExpired:
+            raise Failure("pull_timeout") from None
+        except Failure as error:
+            if attempt or str(error) != "pull_registry_transient" or deadline - time.monotonic() <= 5:
+                raise
+            time.sleep(3)
 
 
 class Project:
@@ -135,16 +174,20 @@ def trial(root, source, receiver, report, peer):
         report["stage"] = name
         print("Immich restore trial: " + name, flush=True)
 
-    stage("acquire_pinned_release")
+    stage("verify_upstream_release")
     lock = json.loads((REPO / "upstream.lock.json").read_text())
     check((lock["commit"], lock["release"]) == (UPSTREAM, "v3.2.4"), "upstream_lock")
+    stage("claim_disposable_projects")
     source.claim()
     receiver.claim()
+    stage("resolve_pinned_compose")
     config = json.loads(source.compose("config", "--format", "json"))
     images = {config["services"][name]["image"] for name in ("server", "database", "redis")}
     check(len(images) == 3 and all(re.fullmatch(r"[a-z0-9./-]+@sha256:[0-9a-f]{64}", i)
                                   for i in images), "image_digest_required")
-    source.compose("pull", "server", "redis", "database", timeout=420)
+    stage("pull_pinned_release")
+    pull_release(source)
+    stage("inspect_pinned_server")
     server_image = config["services"]["server"]["image"]
     revision = command(["docker", "image", "inspect", "-f",
                         '{{index .Config.Labels "org.opencontainers.image.revision"}}', server_image])
@@ -290,7 +333,10 @@ def main():
     except (Failure, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         report["reason"] = str(error) if isinstance(error, (Failure, PeerError)) else type(error).__name__
     report["private_scratch_removed"] = scratch is None or not Path(scratch).exists()
-    report["docker_resources_removed"] = not source.objects() and not receiver.objects()
+    try:
+        report["docker_resources_removed"] = not source.objects() and not receiver.objects()
+    except (Failure, OSError, subprocess.TimeoutExpired):
+        report["docker_resources_removed"] = False
     if not (report["private_scratch_removed"] and report["docker_resources_removed"]):
         report["status"] = "failed"
     with evidence.open("x") as output:
