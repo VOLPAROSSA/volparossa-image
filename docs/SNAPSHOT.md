@@ -80,17 +80,21 @@ disabled, as much of the input is already compressed and expansion must remain b
 
 ## Restore without consuming or replacing anything
 
-Obtain `snapshot.pgp` and the private recovery key in an owner-only bundle directory. Supply
-the expected ciphertext SHA-256 from the owner or the authenticated core storage journal;
-do not treat an arbitrary fetched `receipt.json` as the trust anchor.
+Obtain `snapshot.pgp` in an owner-only bundle directory. Supply the expected
+ciphertext SHA-256 from the owner or the authenticated core storage journal.
+Use `--recovery-key-file` to read the owner's separately stored key directly.
+A bundle created locally can use its existing `recovery.key` by omitting the option.
 
 ```sh
 python3 scripts/immich_snapshot.py restore \
   --bundle /owner/private/recovered-bundle \
+  --recovery-key-file /owner/keys/immich.key \
   --expected-sha256 OWNER_VERIFIED_64_HEX_SHA256 \
   --output /owner/private/new-restored-copy
 ```
 
+The key must be a private, owner-held, single-link regular file in an owner-only
+directory. The decoder passes its contents to GnuPG through a private descriptor.
 The operation verifies the entire ciphertext hash before decryption, then checks standard
 GnuPG AES-256/MDC status and successful process exit. A bounded tar reader rejects links,
 special/extended records, unsafe paths, duplicate entries, over-limit data, mismatched
@@ -131,9 +135,13 @@ non-consuming restores, wrong-key rejection, ciphertext corruption including a r
 external hash, source mutation, overwrite/link/traversal/resource rejection, owner-only modes
 and exact child/runtime cleanup. No personal photos or live database are used.
 
-Peer storage durability, redundant fragment recovery, original Immich database import,
-mobile sync, native UI and server-independent operation require their own real integration
-proofs. This local archive result does not complete any of those paths.
+In the separate application trial, a synthetic owner uploaded an 8,516-byte PNG
+through the Immich API and added it to a private album. The trial stopped the
+source application before dumping PostgreSQL and copying its media. After peer
+recovery, it restored the dump into an empty PostgreSQL database and the media
+into a fresh volume. A new authenticated client verified the owner identity,
+album membership and original bytes. An anonymous download was denied.
+[Joined recovery evidence](SNAPSHOT_STORAGE.md#joined-immich-recovery)
 
 Primary implementation references:
 [GnuPG 2.4.7 foreground socket activation](https://github.com/gpg/gnupg/blob/gnupg-2.4.7/agent/gpg-agent.c),
