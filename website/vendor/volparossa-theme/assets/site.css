@@ -51,3 +51,18 @@ h1,h2,h3{overflow-wrap:anywhere}.brand{max-width:100%;min-width:0}.brand span{mi
 @media(max-width:650px){.panorama-screens{display:none}}
 /* Keep the shared six-link header usable when text alone is enlarged. */
 .nav-wrap,.desktop-nav{flex-wrap:wrap}.desktop-nav{max-width:100%}.page-hero .lead{overflow-wrap:anywhere}
+
+/* Applications disclosure. Keep the directory link usable without scripting. */
+.applications-menu { position: relative; display: flex; align-items: center; }
+.applications-menu [hidden] { display: none !important; }
+.applications-toggle { display: grid; place-items: center; width: 1.7rem; min-height: 2.5rem; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; }
+.applications-toggle span { width: .48em; height: .48em; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-15%) rotate(45deg); }
+.applications-toggle[aria-expanded=true] span { transform: translateY(20%) rotate(225deg); }
+.applications-toggle:focus-visible { outline: 2px solid #ffd48d; outline-offset: -3px; }
+.site-header .applications-list { position: absolute; top: 100%; left: 0; z-index: 4; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); width: 17rem; padding: .45rem; margin: 0; list-style: none; background: #241d22; color: #fff1de; border: 1px solid #806641; border-radius: 4px; box-shadow: 0 8px 22px #120e1255; }
+.site-header .applications-list a { display: block; padding: .65rem .75rem; color: inherit; font: 500 .88rem/1.25 var(--sans); text-decoration: none; }
+.site-header .applications-list a:is(:hover,:focus-visible) { background: #423333; color: #ffe0a7; }
+.mobile-nav .applications-menu { flex-wrap: wrap; justify-content: space-between; }
+.mobile-nav .applications-toggle { min-width: 44px; min-height: 44px; }
+.mobile-nav .applications-list { position: static; width: 100%; box-shadow: none; }
+.mobile-nav[open] > nav { max-height: 75vh; max-height: 75dvh; overflow-y: auto; }

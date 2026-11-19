@@ -9,15 +9,14 @@ and recovery must still work when a device is replaced. VOLPAROSSA Image builds
 on Immich, with the goal of managing and synchronizing that library without a
 personally maintained server that must stay online.
 
-The [VOLPAROSSA core](https://github.com/VOLPAROSSA/volparossa) provides the shared
-storage foundation: peers hold encrypted fragments while recovery keys stay with
-the owner. Contributors can help connect the [snapshot recovery slice](docs/SNAPSHOT_STORAGE.md)
-to real library and mobile use. Persistent repair, renewal and deletion through
-the current adapter still need a joined proof.
+A fresh Immich 3.2.4 installation recovered a private test album through three
+VOLPAROSSA Storage providers. With the original installation removed and one
+provider offline, an owner signed in again and downloaded the original photo.
+Storage held only ciphertext. The recovery key stayed with the owner.
+[Recovery evidence and exact revisions](docs/SNAPSHOT_STORAGE.md#joined-immich-recovery)
 
-> Development integration, not yet a working server-independent Immich application.
-> A scoped encrypted-snapshot/peer-recovery trial passes; live library operation and
-> mobile integration remain unfinished.
+Continuous library availability, Android and iOS synchronization, and background
+processing on authorized devices remain in development.
 
 **Target clients: Android, iPhone/iPad and the web browser.** The shared core/data
 contract comes first; a working web-only version would not complete the mobile scope.
@@ -77,14 +76,12 @@ Do not upload the entire snapshot bundle: only `snapshot.pgp` belongs on storage
 never `recovery.key`. Keep originals until independently verified recovery and an explicit
 owner decision to remove them.
 
-The [combined peer snapshot trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039)
-passes on exact Image `e177afebabd99ac0773de2a73d60275346a5de52` and core
-`cf4de524ce885af95d0f75fcb53d80254486c27f`: a synthetic encrypted snapshot is spread
-as eight fragment copies over three providers, provider A is stopped, and B/C supply
-two complete decryptions/restores. All-copy deletion and private/network cleanup pass.
-This proves that pinned snapshot/storage slice, **not the newer Node adapter**, a
-running restored Immich library, device synchronization or server-independent mobile use.
-Those application paths still require their own functional proofs.
+The earlier synthetic archive trial verified fragment recovery and deletion on
+Image `e177afeb` and Core `cf4de524`. The subsequent Immich trial verified the
+live database and media through the same recovery lifecycle using a real API
+client and a new application instance.
+[Archive trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/36905847039) ·
+[Immich application and peer trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/44411540175)
 
 See [upstream pin and source boundaries](docs/UPSTREAM.md) and
 [Android, iOS and web integration points](docs/CLIENT_INTEGRATION.md).

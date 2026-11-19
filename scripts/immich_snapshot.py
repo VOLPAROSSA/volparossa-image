@@ -443,7 +443,28 @@ def restore_tar(source, staging, max_bytes):
     return len(records), total
 
 
-def restore(bundle, output, *, expected_sha256, max_bytes=DEFAULT_BYTES, timeout_seconds=3600):
+def read_recovery_key(path):
+    # Pin the private directory and validate the same open file that supplies the passphrase.
+    parent = exact_directory(path.parent)
+    directory = os.open(parent, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(directory)
+        require(info.st_uid == os.getuid() and info.st_mode & 0o077 == 0, "PRIVATE_KEY_DIRECTORY_REQUIRED")
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as secret:
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+                    and info.st_mode & 0o077 == 0 and info.st_size == 65, "PRIVATE_KEY_REQUIRED")
+            raw = secret.read(66)
+            require(re.fullmatch(rb"[0-9a-f]{64}\n", raw) and identity(info) == identity(os.fstat(fd)),
+                    "INVALID_RECOVERY_KEY")
+            return raw[:-1]
+    finally:
+        os.close(directory)
+
+
+def restore(bundle, output, *, expected_sha256, recovery_key_file=None, max_bytes=DEFAULT_BYTES,
+            timeout_seconds=3600):
     require(re.fullmatch(r"[0-9a-f]{64}", expected_sha256 or ""), "EXPECTED_CIPHER_HASH_REQUIRED")
     require(type(max_bytes) is int and 0 < max_bytes <= 1024**4, "INVALID_BYTE_LIMIT")
     require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 86400, "INVALID_TIMEOUT")
@@ -451,15 +472,7 @@ def restore(bundle, output, *, expected_sha256, max_bytes=DEFAULT_BYTES, timeout
     require(bundle.stat().st_uid == os.getuid() and bundle.stat().st_mode & 0o077 == 0,
             "PRIVATE_BUNDLE_REQUIRED")
     target = new_target(output, bundle)
-    key_path = bundle / "recovery.key"
-    key_fd = os.open(key_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(key_fd, "rb") as secret:
-        info = os.fstat(secret.fileno())
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
-                and info.st_mode & 0o077 == 0 and info.st_size == 65, "PRIVATE_KEY_REQUIRED")
-        raw = secret.read(66)
-        require(re.fullmatch(rb"[0-9a-f]{64}\n", raw), "INVALID_RECOVERY_KEY")
-        key = raw[:-1]
+    key = read_recovery_key(bundle / "recovery.key" if recovery_key_file is None else Path(recovery_key_file))
     cipher_fd = os.open(bundle / "snapshot.pgp", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     staging = Path(tempfile.mkdtemp(prefix="r-", dir=target.parent))
     try:
@@ -514,6 +527,8 @@ def main():
             command.add_argument("--quiesced-copy", action="store_true")
         else:
             command.add_argument("--bundle", type=Path, required=True)
+            command.add_argument("--recovery-key-file", type=Path,
+                                 help="read the owner's key from this private file (default: BUNDLE/recovery.key)")
             command.add_argument("--expected-sha256", required=True)
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SnapshotError("INTERRUPTED")))
@@ -522,7 +537,7 @@ def main():
         options = dict(max_bytes=args.max_bytes, timeout_seconds=args.timeout_seconds)
         result = (create(args.source, args.output, quiesced_copy=args.quiesced_copy, **options)
                   if args.command == "create" else restore(args.bundle, args.output,
-                      expected_sha256=args.expected_sha256, **options))
+                      expected_sha256=args.expected_sha256, recovery_key_file=args.recovery_key_file, **options))
         print(json.dumps(result, sort_keys=True))
     except (SnapshotError, OSError, ValueError, EOFError, tarfile.TarError,
             subprocess.SubprocessError, KeyboardInterrupt) as error:

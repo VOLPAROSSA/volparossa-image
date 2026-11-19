@@ -10,18 +10,97 @@
   },
   "github": "https://github.com/VOLPAROSSA",
   "main": [
-    {"key": "discover", "label": "Discover"},
-    {"key": "core", "label": "Core"},
-    {"key": "applications", "label": "Applications"},
-    {"key": "docs", "label": "Documentation"},
-    {"key": "contribute", "label": "Get involved"},
-    {"key": "github", "label": "GitHub"}
+    {
+      "key": "discover",
+      "label": "Discover"
+    },
+    {
+      "key": "core",
+      "label": "Core"
+    },
+    {
+      "key": "applications",
+      "label": "Applications",
+      "children": [
+        {
+          "name": "Code",
+          "url": "https://volparossa.org/volparossa-code/"
+        },
+        {
+          "name": "Image",
+          "url": "https://volparossa.org/volparossa-image/"
+        },
+        {
+          "name": "Cloud",
+          "url": "https://volparossa.org/volparossa-cloud/"
+        },
+        {
+          "name": "Browser",
+          "url": "https://volparossa.org/volparossa-browser/"
+        },
+        {
+          "name": "Chat",
+          "url": "https://volparossa.org/volparossa-chat/"
+        },
+        {
+          "name": "Mail",
+          "url": "https://volparossa.org/volparossa-mail/"
+        },
+        {
+          "name": "Map",
+          "url": "https://volparossa.org/volparossa-map/"
+        },
+        {
+          "name": "Weather",
+          "url": "https://volparossa.org/volparossa-weather/"
+        },
+        {
+          "name": "Studio",
+          "url": "https://volparossa.org/volparossa-studio/"
+        },
+        {
+          "name": "Bank",
+          "url": "#bank"
+        },
+        {
+          "name": "Citizen",
+          "url": "#citizen"
+        }
+      ]
+    },
+    {
+      "key": "docs",
+      "label": "Documentation"
+    },
+    {
+      "key": "contribute",
+      "label": "Get involved"
+    },
+    {
+      "key": "github",
+      "label": "GitHub"
+    }
   ],
   "footer": [
-    {"key": "core", "label": "Core"},
-    {"key": "docs", "label": "Documentation"},
-    {"key": "applications", "label": "Applications"},
-    {"key": "contribute", "label": "Get involved"},
-    {"key": "github", "label": "GitHub"}
+    {
+      "key": "core",
+      "label": "Core"
+    },
+    {
+      "key": "docs",
+      "label": "Documentation"
+    },
+    {
+      "key": "applications",
+      "label": "Applications"
+    },
+    {
+      "key": "contribute",
+      "label": "Get involved"
+    },
+    {
+      "key": "github",
+      "label": "GitHub"
+    }
   ]
 }
