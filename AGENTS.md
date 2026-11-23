@@ -1,5 +1,11 @@
 # VOLPAROSSA Image
 
+Follow the [shared development workflow](https://github.com/VOLPAROSSA/volparossa/blob/main/docs/development/CODEX_WORKFLOW.md) for Codex, OpenCode and other coding agents.
+Start with the user's task and the relevant part of the [README](README.md).
+Choose available models, reasoning effort, tools and any delegation according
+to the task's complexity, risk and cost. Use targeted checks. Run builds and
+runtime trials on approved disposable hosted runners.
+
 - Integrate Immich with the shared VOLPAROSSA core; do not create another peer scheduler,
   storage accounting system or identity authority in this application.
 - The goal is no personally operated always-on server. A backup connector alone does not
@@ -16,10 +22,10 @@
   Do not relabel imported upstream code as this repository's original GPL code.
 - Opening the project must not trigger model/runtime downloads, installation or background
   participation. Do not change host networking.
-- Task-scoped, pinned and verified source/model acquisition, workspace-local builds and
-  isolated tests are normal authorized development steps, with no separate approval for
-  each download. Do not use untrusted executable downloads. Global installation or
-  permanent changes outside the workspace require explicit user approval.
+- Task-scoped acquisition of pinned and verified sources and models is authorized
+  within the workspace. Run builds and isolated tests on approved disposable
+  hosted runners. Do not use untrusted executable downloads. Global installation
+  or permanent changes outside the workspace require explicit user approval.
 - Develop product model/runtime distribution and release updates under the core's
   pre-established authorization. Verify provenance, authenticity and integrity, enforce
   privacy and resource limits, and do not expand permissions. This does not authorize
